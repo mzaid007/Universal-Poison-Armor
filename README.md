@@ -29,6 +29,7 @@ Combines standard, native agentic behavioral directives (`SKILL.md`) with a high
   - [Google Antigravity](#google-antigravity)
   - [Claude Desktop](#claude-desktop)
   - [Cursor IDE / Windsurf](#cursor-ide--windsurf)
+  - [Cloud Deployment (Hugging Face Spaces)](#cloud-deployment-hugging-face-spaces)
 - [🛠️ Exposed MCP Tools](#️-exposed-mcp-tools)
   - [`sanitize_document`](#sanitize_document)
   - [`scan_dataset_for_anomalies`](#scan_dataset_for_anomalies)
@@ -244,6 +245,36 @@ Add to your `claude_desktop_config.json`:
    ```bash
    /path/to/Universal-Poison-Armor/venv/bin/python /path/to/Universal-Poison-Armor/skills/ai-poison-defense/src/server.py
    ```
+
+---
+
+### Cloud Deployment (Hugging Face Spaces)
+
+You can deploy Universal Poison Armor to the cloud for free by creating a **Docker** Space on [Hugging Face Spaces](https://huggingface.co/spaces) and uploading this repository.
+
+1. **Create a Docker Space**:
+   - Go to [huggingface.co/new-space](https://huggingface.co/new-space).
+   - Name your Space (e.g. `universal-poison-armor`).
+   - Select **Docker** as the Space SDK (Blank template).
+   - Set visibility to **Public** (or **Private** with an access token).
+
+2. **Upload / Push the Repository**:
+   - Push this repository to your Hugging Face Space Git remote or upload the files directly.
+   - Hugging Face automatically builds the container using the included `Dockerfile` on `python:3.11-slim` and exposes the SSE server on port `7860`.
+
+3. **Connect Your AI Agent via SSE**:
+   Configure your MCP client (`claude.json`, `claude_desktop_config.json`, Cursor, etc.) to connect to the cloud server over Server-Sent Events (SSE). Replace `<your-username>` and `<your-space-name>` with your actual Hugging Face Space URL:
+
+```json
+{
+  "mcpServers": {
+    "universal-poison-armor-cloud": {
+      "type": "sse",
+      "url": "https://<your-username>-<your-space-name>.hf.space/sse"
+    }
+  }
+}
+```
 
 ---
 

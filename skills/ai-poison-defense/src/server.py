@@ -326,6 +326,6 @@ def verify_article_consensus(articles: List[Dict[str, Any]]) -> str:
 
 
 if __name__ == "__main__":
-    # Start the FastMCP server over standard I/O (stdio) transport
-    logger.info("Starting Universal Poison Armor MCP Server on stdio transport...")
-    mcp.run(transport="stdio")
+    # Start the FastMCP server over Server-Sent Events (SSE) transport for cloud / web deployment
+    logger.info("Starting Universal Poison Armor MCP Server on SSE transport (0.0.0.0:7860)...")
+    mcp.run(transport="sse", host="0.0.0.0", port=7860)
