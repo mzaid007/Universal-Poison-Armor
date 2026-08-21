@@ -1,7 +1,4 @@
-"""
-Universal Poison Armor MCP Server (Root wrapper / alias)
-========================================================
-"""
+import os
 import sys
 from pathlib import Path
 
@@ -18,4 +15,11 @@ from skills.ai_poison_defense.src.server import (  # type: ignore
 )
 
 if __name__ == "__main__":
-    mcp.run(transport="sse", host="0.0.0.0", port=7860)
+    transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
+    if transport == "sse":
+        host = os.environ.get("HOST", "0.0.0.0")
+        port = int(os.environ.get("PORT", "7860"))
+        mcp.run(transport="sse", host=host, port=port)
+    else:
+        mcp.run(transport="stdio")
+

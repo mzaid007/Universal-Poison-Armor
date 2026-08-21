@@ -140,6 +140,27 @@ class PoisonDefenseEngine:
         ".un.org",
     }
 
+    # Compiled allowlist patterns for legitimate high-entropy tokens (API keys, UUIDs, Hashes, Base64, JWTs)
+    UUID_PATTERN = re.compile(
+        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    HEX_DIGEST_PATTERN = re.compile(
+        r"^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{40}|[0-9a-fA-F]{56}|[0-9a-fA-F]{64}|[0-9a-fA-F]{96}|[0-9a-fA-F]{128})$"
+    )
+    JWT_PATTERN = re.compile(
+        r"^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$"
+    )
+    BASE64_PATTERN = re.compile(
+        r"^[A-Za-z0-9+/]{8,}={0,2}$"
+    )
+    BASE64URL_PATTERN = re.compile(
+        r"^[A-Za-z0-9_-]{8,}={0,2}$"
+    )
+    API_KEY_PREFIX_PATTERN = re.compile(
+        r"^(?:sk-|sk-ant-|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|AKIA|xox[baprs]-|Bearer\s+|pk_|sec_|key-|token-)[A-Za-z0-9_./+-=]+$",
+        re.IGNORECASE,
+    )
+
     def __init__(
         self,
         model_name: str = "all-MiniLM-L6-v2",
@@ -179,6 +200,106 @@ class PoisonDefenseEngine:
             n_estimators=100,
         )
         logger.info("PoisonDefenseEngine initialized successfully.")
+
+    # Adversarial special punctuation symbol set characteristic of GCG / jailbreak gibberish attacks
+    ADVERSARIAL_SPECIAL_SYMBOLS = set("!@#$%^&*~`|}{[]?><;")
+
+    def is_legitimate_token(self, token: str) -> bool:
+        """
+        Determines if a string matches known legitimate high-entropy formats
+        (API keys, UUIDs, cryptographic hex digests, Base64 strings, or JWTs).
+
+        Args:
+            token: The string token to evaluate.
+
+        Returns:
+            True if the token is a legitimate high-entropy pattern, False otherwise.
+        """
+        if not token:
+            return True
+
+        clean = token.strip().strip("'\"`,;:()[]{}<>=")
+        if not clean:
+            return True
+
+        # If it's a key=value or key: value pair, check the value portion
+        for sep in ("=", ":"):
+            if sep in clean:
+                parts = clean.split(sep, 1)
+                val = parts[1].strip().strip("'\"`,;:()[]{}<>=")
+                if val and self.is_legitimate_token(val):
+                    return True
+
+        # 1. Check API key prefixes (e.g. sk-, sk-ant-, ghp_, AKIA, xoxb-, Bearer)
+        if self.API_KEY_PREFIX_PATTERN.match(clean):
+            return True
+
+        # 2. Check UUID format
+        if self.UUID_PATTERN.match(clean):
+            return True
+
+        # 3. Check standard Hex digests (MD5: 32, SHA1: 40, SHA256: 64, SHA512: 128)
+        if self.HEX_DIGEST_PATTERN.match(clean):
+            return True
+
+        # 4. Check JWT format (three base64url segments separated by dots)
+        if self.JWT_PATTERN.match(clean):
+            return True
+
+        # 5. Check Base64 / Base64URL shaped strings (with standard padding)
+        if self.BASE64_PATTERN.match(clean) or self.BASE64URL_PATTERN.match(clean):
+            # Verify it contains at most standard base64 symbol characters (+, /, =, -, _)
+            symbols = set(re.findall(r"[^A-Za-z0-9]", clean))
+            if symbols.issubset({"+", "/", "=", "-", "_"}):
+                return True
+
+        return False
+
+    def is_adversarial_block(self, text: str) -> bool:
+        """
+        Evaluates whether a text block represents an adversarial suffix (e.g. GCG attack).
+
+        Requires corroborating signals:
+        1. Shannon entropy > entropy_threshold (default: 4.5 bits/char)
+        2. Must NOT match any legitimate high-entropy allowlist pattern (API keys, UUIDs, Base64, Hex digests, JWTs)
+        3. Must exhibit character-class diversity consistent with adversarial gibberish
+           (specifically presence of adversarial punctuation symbols like !@#$%^&*~`|}{[]?><; alongside alphanumerics).
+
+        Args:
+            text: The candidate string block to evaluate.
+
+        Returns:
+            True if identified as an adversarial high-entropy payload, False otherwise.
+        """
+        clean = text.strip().strip("'\"`")
+        if len(clean) < 15:
+            return False
+
+        # Allowlist check: if it's a known legitimate token, never flag
+        if self.is_legitimate_token(clean):
+            return False
+
+        # Check entropy score
+        entropy = self.calculate_entropy(clean)
+        if entropy <= self.entropy_threshold:
+            return False
+
+        # Check for presence of adversarial special symbols (!@#$%^&*~`|}{[]?><;)
+        adv_symbols = set(clean) & self.ADVERSARIAL_SPECIAL_SYMBOLS
+        if not adv_symbols:
+            # If there are no adversarial special symbols (only standard code/identifier characters),
+            # do not flag as an adversarial suffix attack.
+            return False
+
+        # GCG / adversarial tokens typically contain a rich mixture of varied symbols (>= 2 distinct adversarial symbols)
+        # or a significant symbol density (>= 10% of characters are adversarial symbols)
+        adv_symbol_count = sum(1 for c in clean if c in self.ADVERSARIAL_SPECIAL_SYMBOLS)
+        adv_symbol_ratio = adv_symbol_count / len(clean)
+
+        if len(adv_symbols) >= 2 or adv_symbol_ratio >= 0.10:
+            return True
+
+        return False
 
     def calculate_entropy(self, text: str) -> float:
         """
@@ -243,13 +364,14 @@ class PoisonDefenseEngine:
         """
         Sanitizes a document or prompt by stripping invisible/zero-width Unicode
         characters, redacting known prompt injection attack phrases, and detecting
-        adversarial suffix attacks via Shannon Entropy analysis.
+        adversarial suffix attacks via layered Shannon Entropy & token analysis.
 
         Workflow:
         1. Strips all zero-width and invisible steganographic Unicode sequences.
         2. Applies compiled regex patterns targeting known prompt injection phrases.
-        3. Analyzes Shannon Entropy of distinct blocks and tokens. If an adversarial
-           suffix or high-entropy block (> 4.5) is detected, it is redacted with
+        3. Analyzes Shannon Entropy and character diversity of distinct blocks and tokens.
+           If an adversarial suffix (> 4.5 entropy with corroborating attack signals)
+           is detected and not in the legitimate allowlist, it is redacted with
            `[ADVERSARIAL_SUFFIX_THREAT: REDACTED_HIGH_ENTROPY_BLOCK]`.
         4. Cleans and normalizes redundant whitespace and repeated markers.
 
@@ -282,10 +404,10 @@ class PoisonDefenseEngine:
                 processed_lines.append(line)
                 continue
 
-            # If the entire line is a high-entropy string (> 4.5) with no natural spaces/words
-            if len(stripped_line) >= 20 and " " not in stripped_line and self.calculate_entropy(stripped_line) > self.entropy_threshold:
+            # If the entire line is a single unbroken adversarial block (no spaces)
+            if " " not in stripped_line and len(stripped_line) >= 15 and self.is_adversarial_block(stripped_line):
                 logger.warning(
-                    "Adversarial high-entropy line detected (Entropy: %0.2f > %0.2f): %s",
+                    "Adversarial high-entropy block detected (Entropy: %0.2f > %0.2f): %s",
                     self.calculate_entropy(stripped_line),
                     self.entropy_threshold,
                     stripped_line[:60],
@@ -293,26 +415,25 @@ class PoisonDefenseEngine:
                 processed_lines.append(self.ADVERSARIAL_SUFFIX_MARKER)
                 continue
 
-            # Check individual space-separated tokens in the line for embedded high-entropy suffixes
+            # Check individual space-separated tokens in the line
             tokens = stripped_line.split(" ")
             sanitized_tokens = []
-            has_high_entropy_token = False
+            has_adversarial_token = False
 
             for token in tokens:
-                # If a single token has length >= 18 and entropy > 4.5 (e.g. GCG suffix string)
-                if len(token) >= 18 and self.calculate_entropy(token) > self.entropy_threshold:
+                if len(token) >= 15 and self.is_adversarial_block(token):
                     sanitized_tokens.append(self.ADVERSARIAL_SUFFIX_MARKER)
-                    has_high_entropy_token = True
+                    has_adversarial_token = True
                 else:
                     sanitized_tokens.append(token)
 
-            if has_high_entropy_token:
+            if has_adversarial_token:
                 processed_lines.append(" ".join(sanitized_tokens))
             else:
-                # Check multi-token trailing suffix (e.g. last 4 tokens combined)
+                # Check multi-token trailing suffix (e.g. last 3 tokens combined)
                 if len(tokens) >= 3:
                     trailing_suffix = " ".join(tokens[-3:])
-                    if len(trailing_suffix) >= 20 and self.calculate_entropy(trailing_suffix) > self.entropy_threshold:
+                    if len(trailing_suffix) >= 15 and self.is_adversarial_block(trailing_suffix):
                         prefix = " ".join(tokens[:-3])
                         processed_lines.append(f"{prefix} {self.ADVERSARIAL_SUFFIX_MARKER}".strip())
                         continue

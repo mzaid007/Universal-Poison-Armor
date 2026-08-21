@@ -3,12 +3,15 @@ Comprehensive Test Suite for Universal Poison Armor
 ===================================================
 Tests regex sanitization, zero-width Unicode stripping,
 Markdown XSS & tracking pixel neutralization, Shannon Entropy
-adversarial suffix detection, Consensus Poisoning / Sybil defense,
-persistent security audit logging, and FastMCP tool handlers.
+adversarial suffix detection, allowlisting of legitimate secrets/hashes,
+Consensus Poisoning / Sybil defense, persistent security audit logging,
+and FastMCP stdio/SSE handlers.
 """
 
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import unittest
 
@@ -76,6 +79,48 @@ class TestPoisonDefenseEngine(unittest.TestCase):
         sanitized = self.engine.strip_injections(dirty_input)
         self.assertIn("ADVERSARIAL_SUFFIX_THREAT", sanitized)
         self.assertIn("Write a summary of the quarterly report.", sanitized)
+
+    def test_legitimate_secrets_and_tokens_preserved(self):
+        """
+        Regression Test for Bug 2: Ensure real secrets, API keys, UUIDs, Base64 strings,
+        hex digests, and JWTs are NOT falsely flagged or redacted as adversarial suffixes.
+        """
+        test_cases = [
+            # 1. Anthropic-style API key
+            ("ANTHROPIC_API_KEY=sk-ant-api03-Xk29fnLqPzT8vBmR7cWy4hNj1oQeGdI", "sk-ant-api03-Xk29fnLqPzT8vBmR7cWy4hNj1oQeGdI"),
+            # 2. GitHub Personal Access Token
+            ("export GITHUB_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz", "ghp_1234567890abcdefghijklmnopqrstuvwxyz"),
+            # 3. Standard UUID
+            ("user_id = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'", "a1b2c3d4-e5f6-7890-abcd-ef1234567890"),
+            # 4. Base64 encoded payload
+            ("payload = 'aHR0cHM6Ly9leGFtcGxlLmNvbS9hcGkvdjEvdXNlcnM='", "aHR0cHM6Ly9leGFtcGxlLmNvbS9hcGkvdjEvdXNlcnM="),
+            # 5. SHA-256 hex digest
+            ("file_sha256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            # 6. JSON Web Token (JWT)
+            (
+                "token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+                "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+            ),
+        ]
+
+        for input_text, expected_token in test_cases:
+            # Test engine level
+            engine_sanitized = self.engine.strip_injections(input_text)
+            self.assertNotIn(
+                "ADVERSARIAL_SUFFIX_THREAT",
+                engine_sanitized,
+                f"Legitimate token was falsely flagged by strip_injections: {expected_token}",
+            )
+            self.assertIn(expected_token, engine_sanitized)
+
+            # Test MCP tool level
+            mcp_sanitized = sanitize_document(input_text)
+            self.assertNotIn(
+                "ADVERSARIAL_SUFFIX_THREAT",
+                mcp_sanitized,
+                f"Legitimate token was falsely flagged by sanitize_document: {expected_token}",
+            )
+            self.assertIn(expected_token, mcp_sanitized)
 
     def test_strip_zero_width_unicode(self):
         """Test removal of invisible zero-width and directional Unicode characters."""
@@ -303,6 +348,48 @@ class TestMCPToolsAndAuditLog(unittest.TestCase):
         ]
         report = verify_article_consensus(clean_batch)
         self.assertIn("✅ CONSENSUS VERIFICATION PASSED", report)
+
+    def test_mcp_stdio_handshake(self):
+        """
+        Regression Test for Bug 1: Verify default subprocess execution speaks MCP over stdio
+        and successfully completes the JSON-RPC initialization handshake.
+        """
+        server_path = skill_src / "server.py"
+        req = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "test-harness", "version": "1.0"},
+            },
+        }) + "\n"
+
+        env = os.environ.copy()
+        env.pop("MCP_TRANSPORT", None)
+        env["PYTHONUNBUFFERED"] = "1"
+
+        proc = subprocess.Popen(
+            [sys.executable, "-u", str(server_path)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+
+        try:
+            stdout, stderr = proc.communicate(input=req, timeout=30)
+            self.assertIn("jsonrpc", stdout)
+            self.assertIn("Universal Poison Armor", stdout)
+            response = json.loads(stdout.strip().splitlines()[0])
+            self.assertEqual(response.get("id"), 1)
+            self.assertIn("result", response)
+            self.assertIn("capabilities", response["result"])
+        finally:
+            if proc.poll() is None:
+                proc.kill()
 
 
 if __name__ == "__main__":
