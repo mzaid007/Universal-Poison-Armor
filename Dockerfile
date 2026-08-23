@@ -6,8 +6,10 @@ RUN useradd -m -u 1000 user
 # Switch to non-root user
 USER user
 
-# Ensure user local bin is in PATH
-ENV PATH="/home/user/.local/bin:$PATH"
+# Ensure user local bin is in PATH and default to SSE transport for cloud container
+ENV PATH="/home/user/.local/bin:$PATH" \
+    MCP_TRANSPORT="sse" \
+    PORT=7860
 
 # Set working directory
 WORKDIR /home/user/app

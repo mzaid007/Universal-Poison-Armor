@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import logging
+import os
 from pathlib import Path
 import sys
 from typing import Any, Dict, List
@@ -134,12 +135,7 @@ def sanitize_document(document_text: str) -> str:
     if xss_cleaned != raw_input:
         detected_threats.append("MARKDOWN_XSS_TRACKING_PIXEL")
 
-    # 2. Check character Shannon entropy for mathematical adversarial suffixes (GCG attacks)
-    entropy_score = engine.calculate_entropy(raw_input)
-    if entropy_score > engine.entropy_threshold and len(raw_input) >= 20:
-        detected_threats.append(f"ADVERSARIAL_SUFFIX_THREAT (Entropy: {entropy_score:.2f} > {engine.entropy_threshold:.2f})")
-
-    # 3. Strip zero-width Unicode characters and redact prompt injections
+    # 2. Strip zero-width Unicode characters, redact prompt injections, and detect adversarial suffixes
     fully_sanitized = engine.strip_injections(xss_cleaned)
 
     # Check if prompt injection phrases were redacted
@@ -147,8 +143,8 @@ def sanitize_document(document_text: str) -> str:
         detected_threats.append("PROMPT_INJECTION_ATTEMPT")
 
     # Check if adversarial suffix marker was inserted
-    if "[ADVERSARIAL_SUFFIX_THREAT" in fully_sanitized and not any("ADVERSARIAL_SUFFIX_THREAT" in t for t in detected_threats):
-        detected_threats.append(f"ADVERSARIAL_SUFFIX_THREAT (Entropy: {entropy_score:.2f})")
+    if "[ADVERSARIAL_SUFFIX_THREAT" in fully_sanitized:
+        detected_threats.append("ADVERSARIAL_SUFFIX_THREAT")
 
     # Check if zero-width characters were present
     if engine.ZERO_WIDTH_PATTERN.search(raw_input):
@@ -326,6 +322,12 @@ def verify_article_consensus(articles: List[Dict[str, Any]]) -> str:
 
 
 if __name__ == "__main__":
-    # Start the FastMCP server over Server-Sent Events (SSE) transport for cloud / web deployment
-    logger.info("Starting Universal Poison Armor MCP Server on SSE transport (0.0.0.0:7860)...")
-    mcp.run(transport="sse", host="0.0.0.0", port=7860)
+    transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
+    if transport == "sse":
+        host = os.environ.get("HOST", "0.0.0.0")
+        port = int(os.environ.get("PORT", "7860"))
+        logger.info("Starting Universal Poison Armor MCP Server on SSE transport (%s:%d)...", host, port)
+        mcp.run(transport="sse", host=host, port=port)
+    else:
+        logger.info("Starting Universal Poison Armor MCP Server on stdio transport...")
+        mcp.run(transport="stdio")
