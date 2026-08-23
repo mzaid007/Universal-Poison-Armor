@@ -250,7 +250,7 @@ Add to your `claude_desktop_config.json`:
 
 ### Cloud Deployment (Hugging Face Spaces)
 
-You can deploy Universal Poison Armor to the cloud for free by creating a **Docker** Space on [Hugging Face Spaces](https://huggingface.co/spaces) and uploading this repository.
+You can deploy Universal Poison Armor to the cloud by creating a **Docker** Space on [Hugging Face Spaces](https://huggingface.co/spaces) and uploading this repository.
 
 1. **Create a Docker Space**:
    - Go to [huggingface.co/new-space](https://huggingface.co/new-space).
