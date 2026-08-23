@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "universal-poison-armor": {
+      "command": "python",
+      "args": ["skills/ai-poison-defense/src/server.py"]
+    }
+  }
+}
