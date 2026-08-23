@@ -4,6 +4,7 @@
 [![Python: 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Protocol-purple.svg)](https://modelcontextprotocol.io/)
 [![FastMCP](https://img.shields.io/badge/FastMCP-Enabled-green.svg)](https://github.com/jlowin/fastmcp)
+[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/mzaid007/universal-poison-armor)
 [![Security: AI Poison Defense](https://img.shields.io/badge/Security-AI%20Poison%20Defense-red.svg)](#)
 
 **Universal Poison Armor** is an open-source, production-grade security framework and **Model Context Protocol (MCP)** server for AI agents, LLM pipelines, and RAG systems. It provides multi-layer protection against indirect prompt injection, zero-width Unicode steganography, adversarial suffixes (GCG attacks), tracking pixels / Markdown XSS, semantic dataset poisoning, and Consensus Poisoning / Sybil attacks.
