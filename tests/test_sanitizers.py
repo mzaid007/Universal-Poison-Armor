@@ -367,7 +367,7 @@ class TestMCPToolsAndAuditLog(unittest.TestCase):
         }) + "\n"
 
         env = os.environ.copy()
-        env.pop("MCP_TRANSPORT", None)
+        env["MCP_TRANSPORT"] = "stdio"
         env["PYTHONUNBUFFERED"] = "1"
 
         proc = subprocess.Popen(

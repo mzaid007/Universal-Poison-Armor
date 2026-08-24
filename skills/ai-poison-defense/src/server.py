@@ -322,12 +322,12 @@ def verify_article_consensus(articles: List[Dict[str, Any]]) -> str:
 
 
 if __name__ == "__main__":
-    transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
-    if transport == "sse":
-        host = os.environ.get("HOST", "0.0.0.0")
-        port = int(os.environ.get("PORT", "7860"))
-        logger.info("Starting Universal Poison Armor MCP Server on SSE transport (%s:%d)...", host, port)
-        mcp.run(transport="sse", host=host, port=port)
-    else:
+    transport = os.environ.get("MCP_TRANSPORT", "sse").lower()
+    if transport == "stdio":
         logger.info("Starting Universal Poison Armor MCP Server on stdio transport...")
         mcp.run(transport="stdio")
+    else:
+        port = int(os.environ.get("PORT", 8080))
+        host = os.environ.get("HOST", "0.0.0.0")
+        logger.info("Starting Universal Poison Armor MCP Server on SSE transport (%s:%d)...", host, port)
+        mcp.run(transport="sse", host=host, port=port)

@@ -15,11 +15,11 @@ from skills.ai_poison_defense.src.server import (  # type: ignore
 )
 
 if __name__ == "__main__":
-    transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
-    if transport == "sse":
-        host = os.environ.get("HOST", "0.0.0.0")
-        port = int(os.environ.get("PORT", "7860"))
-        mcp.run(transport="sse", host=host, port=port)
-    else:
+    transport = os.environ.get("MCP_TRANSPORT", "sse").lower()
+    if transport == "stdio":
         mcp.run(transport="stdio")
+    else:
+        port = int(os.environ.get("PORT", 8080))
+        host = os.environ.get("HOST", "0.0.0.0")
+        mcp.run(transport="sse", host=host, port=port)
 
