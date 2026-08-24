@@ -45,6 +45,54 @@ logger = logging.getLogger("UniversalPoisonArmorServer")
 # Initialize FastMCP server with the official project name
 mcp = FastMCP("Universal Poison Armor")
 
+# Custom HTTP endpoints for cloud health checks, load balancers, and MCP auto-discovery
+try:
+    from starlette.responses import JSONResponse
+
+    @mcp.custom_route("/", methods=["GET"])
+    async def root_status(request):
+        return JSONResponse({
+            "status": "healthy",
+            "service": "Universal Poison Armor",
+            "version": "1.0.0",
+            "protocol": "Model Context Protocol",
+            "transport": "sse",
+            "endpoints": {
+                "sse": "/sse",
+                "messages": "/messages",
+                "health": "/health",
+                "manifest": "/.well-known/mcp-tool.json",
+            },
+            "description": "Multi-layer security firewall and AI poison defense for agents, RAG, and LLM pipelines.",
+        })
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health_check(request):
+        return JSONResponse({"status": "ok", "service": "universal-poison-armor"})
+
+    @mcp.custom_route("/.well-known/mcp-tool.json", methods=["GET"])
+    async def manifest_discovery(request):
+        manifest_path = get_audit_log_path().parent / "mcp-tool.json"
+        if manifest_path.exists():
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    return JSONResponse(json.load(f))
+            except Exception:
+                pass
+        return JSONResponse({
+            "name": "universal-poison-armor",
+            "description": "Multi-layer security firewall and AI poison defense for agents, RAG, and LLM pipelines",
+            "version": "1.0.0",
+            "mcpServers": {
+                "universal-poison-armor": {
+                    "type": "sse",
+                    "url": "/sse",
+                }
+            },
+        })
+except Exception as route_err:
+    logger.debug("FastMCP custom route registration skipped: %s", route_err)
+
 # Initialize singleton instance of the PoisonDefenseEngine
 # This pre-loads the SentenceTransformers embedding model, Isolation Forest, and entropy analyzer
 engine = PoisonDefenseEngine()
@@ -321,13 +369,92 @@ def verify_article_consensus(articles: List[Dict[str, Any]]) -> str:
     return "\n".join(report_lines)
 
 
-if __name__ == "__main__":
-    transport = os.environ.get("MCP_TRANSPORT", "sse").lower()
+def run_server() -> None:
+    """
+    Universal server runner supporting both local/offline execution (stdio)
+    and cloud deployments (SSE on Hugging Face, CreateOS, mcphosting.io, GCP, AWS, Render, etc.).
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Universal Poison Armor MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default=None,
+        help="Transport mode ('stdio' for offline/local AI IDEs, 'sse' for cloud hosting)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port to listen on in SSE mode (defaults to PORT env var, 7860 on Hugging Face, or 8080)",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=None,
+        help="Host address to bind in SSE mode (defaults to HOST env var or 0.0.0.0)",
+    )
+
+    args, _ = parser.parse_known_args()
+
+    # Determine transport
+    # Priority: 1. CLI flag (--transport)
+    #           2. MCP_TRANSPORT environment variable
+    #           3. Cloud environment signature detection
+    #           4. Default: "stdio" for offline/local agents (Claude Desktop, Cursor, Antigravity)
+    env_transport = os.environ.get("MCP_TRANSPORT", "").strip().lower()
+    is_cloud_env = any(
+        k in os.environ
+        for k in [
+            "PORT",
+            "SPACE_ID",            # Hugging Face Spaces
+            "K_SERVICE",           # Google Cloud Run
+            "AWS_EXECUTION_ENV",   # AWS Lambda / ECS / App Runner
+            "ECS_CONTAINER_METADATA_URI",
+            "RAILWAY_ENVIRONMENT", # Railway
+            "RENDER",              # Render
+            "FLY_APP_NAME",        # Fly.io
+            "DYNO",                # Heroku
+        ]
+    )
+
+    if args.transport:
+        transport = args.transport.lower()
+    elif env_transport in ["stdio", "sse"]:
+        transport = env_transport
+    elif is_cloud_env:
+        transport = "sse"
+    else:
+        # Default to stdio for offline / local agent execution
+        transport = "stdio"
+
     if transport == "stdio":
-        logger.info("Starting Universal Poison Armor MCP Server on stdio transport...")
+        logger.info("Starting Universal Poison Armor MCP Server on stdio transport (Offline/Local mode)...")
         mcp.run(transport="stdio")
     else:
-        port = int(os.environ.get("PORT", 8080))
-        host = os.environ.get("HOST", "0.0.0.0")
-        logger.info("Starting Universal Poison Armor MCP Server on SSE transport (%s:%d)...", host, port)
+        host = args.host or os.environ.get("HOST", "0.0.0.0")
+
+        # Resolve port dynamically
+        if args.port is not None:
+            port = args.port
+        elif "PORT" in os.environ:
+            try:
+                port = int(os.environ["PORT"])
+            except ValueError:
+                port = 8080
+        elif "SPACE_ID" in os.environ:
+            port = 7860
+        else:
+            port = 8080
+
+        logger.info(
+            "Starting Universal Poison Armor MCP Server on SSE transport (http://%s:%d/sse)...",
+            host,
+            port,
+        )
         mcp.run(transport="sse", host=host, port=port)
+
+
+if __name__ == "__main__":
+    run_server()

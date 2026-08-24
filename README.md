@@ -249,33 +249,69 @@ Add to your `claude_desktop_config.json`:
 
 ---
 
-### Cloud Deployment (Hugging Face Spaces)
+## 🌐 Universal Deployment Architecture
 
-You can deploy Universal Poison Armor to the cloud by creating a **Docker** Space on [Hugging Face Spaces](https://huggingface.co/spaces) and uploading this repository.
+Universal Poison Armor is designed with an **adaptive transport resolver** that works out-of-the-box in both **100% offline local environments** and **any cloud hosting platform**.
 
-1. **Create a Docker Space**:
-   - Go to [huggingface.co/new-space](https://huggingface.co/new-space).
-   - Name your Space (e.g. `universal-poison-armor`).
-   - Select **Docker** as the Space SDK (Blank template).
-   - Set visibility to **Public** (or **Private** with an access token).
+```
++-----------------------------------------------------------------------------------------+
+|                              UNIVERSAL TRANSPORT RESOLVER                               |
++-----------------------------------------------------------------------------------------+
+|  Environment Detection       | Transport | Endpoints & Ports                           |
++-----------------------------------------------------------------------------------------+
+|  Offline / Local Agents     | stdio     | stdin/stdout JSON-RPC (Claude, Cursor, AGY) |
+|  CreateOS (NodeOps)         | sse       | 0.0.0.0:8080 (Auto-discovery mcp-tool.json)  |
+|  mcphosting.io              | sse       | 0.0.0.0:$PORT (/sse, /health, /manifest)    |
+|  Hugging Face Spaces        | sse       | 0.0.0.0:7860 (UID 1000 non-root user)       |
+|  Google Cloud Run           | sse       | 0.0.0.0:$PORT (Health check GET /)          |
+|  AWS (App Runner / ECS)     | sse       | 0.0.0.0:$PORT (Load balancer health check)  |
++-----------------------------------------------------------------------------------------+
+```
 
-2. **Upload / Push the Repository**:
-   - Push this repository to your Hugging Face Space Git remote or upload the files directly.
-   - Hugging Face automatically builds the container using the included `Dockerfile` on `python:3.11-slim` and exposes the SSE server on port `7860`.
+### 1. CreateOS (NodeOps)
+Deploy directly via GitHub or CLI:
+1. Connect your repository to [CreateOS](https://createos.sh) dashboard or run `createos deploy`.
+2. CreateOS automatically detects [`mcp-tool.json`](file:///f:/Universal-Poison-Armor/mcp-tool.json) and exposes tools via SSE on port `8080`.
+3. Connect your agent to `https://<your-app>.nodeops.app/sse`.
 
-3. **Connect Your AI Agent via SSE**:
-   Configure your MCP client (`claude.json`, `claude_desktop_config.json`, Cursor, etc.) to connect to the cloud server over Server-Sent Events (SSE). Replace `<your-username>` and `<your-space-name>` with your actual Hugging Face Space URL:
+### 2. mcphosting.io
+1. Create a new service on [mcphosting.io](https://www.mcphosting.io/).
+2. Link your Git repository or deploy the Docker container.
+3. mcphosting automatically monitors `/health` and exposes your `/sse` endpoint.
 
+### 3. Hugging Face Spaces
+1. Create a **Docker** Space on [Hugging Face Spaces](https://huggingface.co/new-space).
+2. Push this repository; the container builds with pre-cached model weights and runs on port `7860`.
+3. Connect to `https://<user>-<space>.hf.space/sse`.
+
+### 4. Google Cloud Run / AWS App Runner
+Deploy as a containerized service:
+```bash
+# Google Cloud Run
+gcloud run deploy universal-poison-armor \
+  --source . \
+  --platform managed \
+  --allow-unauthenticated \
+  --port 8080 \
+  --memory 1Gi
+
+# Connect agent:
+# https://<cloud-run-url>/sse
+```
+
+### 5. Local Offline Agent Usage (Claude Desktop, Cursor, Antigravity)
+When executed locally without cloud environment variables, the server automatically defaults to **`stdio`** transport:
 ```json
 {
   "mcpServers": {
-    "universal-poison-armor-cloud": {
-      "type": "sse",
-      "url": "https://<your-username>-<your-space-name>.hf.space/sse"
+    "universal-poison-armor": {
+      "command": "python",
+      "args": ["src/server.py"]
     }
   }
 }
 ```
+
 
 ---
 

@@ -351,10 +351,10 @@ class TestMCPToolsAndAuditLog(unittest.TestCase):
 
     def test_mcp_stdio_handshake(self):
         """
-        Regression Test for Bug 1: Verify default subprocess execution speaks MCP over stdio
+        Regression Test: Verify default subprocess execution speaks MCP over stdio
         and successfully completes the JSON-RPC initialization handshake.
         """
-        server_path = skill_src / "server.py"
+        server_path = repo_root / "src" / "server.py"
         req = json.dumps({
             "jsonrpc": "2.0",
             "id": 1,
@@ -366,8 +366,11 @@ class TestMCPToolsAndAuditLog(unittest.TestCase):
             },
         }) + "\n"
 
+        # Test with clean offline environment (no MCP_TRANSPORT or PORT set)
         env = os.environ.copy()
-        env["MCP_TRANSPORT"] = "stdio"
+        env.pop("MCP_TRANSPORT", None)
+        env.pop("PORT", None)
+        env.pop("SPACE_ID", None)
         env["PYTHONUNBUFFERED"] = "1"
 
         proc = subprocess.Popen(
@@ -391,6 +394,19 @@ class TestMCPToolsAndAuditLog(unittest.TestCase):
             if proc.poll() is None:
                 proc.kill()
 
+    def test_custom_cloud_routes_registered(self):
+        """Test that cloud health check, status, and manifest routes exist on FastMCP."""
+        from server import mcp
+        
+        # FastMCP custom routes inspection
+        app = mcp.http_app()
+        routes = [getattr(r, "path", "") for r in getattr(app, "routes", [])]
+        
+        self.assertIn("/", routes, "Root status endpoint / must be registered")
+        self.assertIn("/health", routes, "Healthcheck endpoint /health must be registered")
+        self.assertIn("/.well-known/mcp-tool.json", routes, "Discovery manifest endpoint must be registered")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

@@ -1,10 +1,26 @@
 {
   "name": "universal-poison-armor",
-  "description": "Multi-layer security firewall for AI agents",
+  "version": "1.0.0",
+  "description": "Multi-layer security firewall and AI poison defense for agents, RAG pipelines, and LLMs",
   "mcpServers": {
     "universal-poison-armor": {
       "type": "sse",
       "url": "/sse"
     }
-  }
+  },
+  "tools": [
+    {
+      "name": "sanitize_document",
+      "description": "Sanitizes untrusted text against Markdown XSS, tracking pixels, zero-width Unicode steganography, prompt injections, and adversarial suffixes (GCG)."
+    },
+    {
+      "name": "scan_dataset_for_anomalies",
+      "description": "Scans document collections or RAG chunks for semantic outlier clusters and poisoned data using dense embeddings and Isolation Forests."
+    },
+    {
+      "name": "verify_article_consensus",
+      "description": "Audits domain provenance (.gov/.edu) and detects coordinated near-duplicate Sybil flooding / Consensus Poisoning campaigns across search results."
+    }
+  ]
 }
+
