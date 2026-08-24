@@ -153,7 +153,7 @@ Universal-Poison-Armor/
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/your-username/Universal-Poison-Armor.git
+git clone https://github.com/mzaid007/Universal-Poison-Armor.git
 cd Universal-Poison-Armor
 
 # 2. Create and activate virtual environment
