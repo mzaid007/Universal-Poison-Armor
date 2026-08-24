@@ -1,0 +1,10 @@
+{
+  "name": "universal-poison-armor",
+  "description": "Multi-layer security firewall for AI agents",
+  "mcpServers": {
+    "universal-poison-armor": {
+      "type": "sse",
+      "url": "/sse"
+    }
+  }
+}
