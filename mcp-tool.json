@@ -11,16 +11,66 @@
   "tools": [
     {
       "name": "sanitize_document",
-      "description": "Sanitizes untrusted text against Markdown XSS, tracking pixels, zero-width Unicode steganography, prompt injections, and adversarial suffixes (GCG)."
+      "description": "Sanitizes untrusted text against Markdown XSS tracking pixels, zero-width Unicode steganography, prompt injections, and adversarial suffixes (GCG attacks). Use on single files, raw user inputs, or individual RAG chunks before LLM ingestion.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "document_text": {
+            "type": "string",
+            "description": "The raw untrusted text content to sanitize."
+          }
+        },
+        "required": ["document_text"]
+      }
     },
     {
       "name": "scan_dataset_for_anomalies",
-      "description": "Scans document collections or RAG chunks for semantic outlier clusters and poisoned data using dense embeddings and Isolation Forests."
+      "description": "Scans document collections, training examples, or RAG chunks for semantic outlier clusters and backdoor poisoned data using dense embeddings and Isolation Forests. Use on batches of documents to isolate compromised samples.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A list of text documents or context chunks to analyze for distribution anomalies."
+          }
+        },
+        "required": ["documents"]
+      }
     },
     {
       "name": "verify_article_consensus",
-      "description": "Audits domain provenance (.gov/.edu) and detects coordinated near-duplicate Sybil flooding / Consensus Poisoning campaigns across search results."
+      "description": "Audits domain provenance (.gov/.edu) and detects coordinated near-duplicate Sybil flooding / Consensus Poisoning campaigns across search results using pairwise semantic similarity. Use when multiple web articles or search results are retrieved.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "articles": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "description": "Origin URL of the article."
+                },
+                "text": {
+                  "type": "string",
+                  "description": "Extracted text body or summary."
+                },
+                "title": {
+                  "type": "string",
+                  "description": "Headline or title of the article."
+                }
+              },
+              "required": ["url", "text"]
+            },
+            "description": "A list of article objects to verify for authentic consensus vs coordinated Sybil flooding."
+          }
+        },
+        "required": ["articles"]
+      }
     }
   ]
 }
-

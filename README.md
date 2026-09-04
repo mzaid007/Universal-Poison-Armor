@@ -4,8 +4,11 @@
 [![Python: 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Protocol-purple.svg)](https://modelcontextprotocol.io/)
 [![FastMCP](https://img.shields.io/badge/FastMCP-Enabled-green.svg)](https://github.com/jlowin/fastmcp)
+[![Glama MCP Server](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor/badges/score.svg)](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor)
 [![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/mzaid007/universal-poison-armor)
 [![Security: AI Poison Defense](https://img.shields.io/badge/Security-AI%20Poison%20Defense-red.svg)](#)
+
+[![Universal-Poison-Armor MCP server](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor/badges/card.svg)](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor)
 
 **Universal Poison Armor** is an open-source, production-grade security framework and **Model Context Protocol (MCP)** server for AI agents, LLM pipelines, and RAG systems. It provides multi-layer protection against indirect prompt injection, zero-width Unicode steganography, adversarial suffixes (GCG attacks), tracking pixels / Markdown XSS, semantic dataset poisoning, and Consensus Poisoning / Sybil attacks.
 
@@ -26,11 +29,12 @@ Combines standard, native agentic behavioral directives (`SKILL.md`) with a high
 - [📂 Project Structure](#-project-structure)
 - [⚡ Quickstart & Installation](#-quickstart--installation)
 - [🤖 Native Agent & Skill Installation](#-native-agent--skill-installation)
+  - [Glama (1-Click Install & Cloud Chat)](#glama-1-click-install--cloud-chat)
   - [Claude Code (Native Skill)](#claude-code-native-skill)
   - [Google Antigravity](#google-antigravity)
   - [Claude Desktop](#claude-desktop)
   - [Cursor IDE / Windsurf](#cursor-ide--windsurf)
-  - [Cloud Deployment (Hugging Face Spaces)](#cloud-deployment-hugging-face-spaces)
+  - [Cloud Deployment (Glama, Hugging Face, CreateOS, GCP, AWS)](#-universal-deployment-architecture)
 - [🛠️ Exposed MCP Tools](#️-exposed-mcp-tools)
   - [`sanitize_document`](#sanitize_document)
   - [`scan_dataset_for_anomalies`](#scan_dataset_for_anomalies)
@@ -175,6 +179,21 @@ pip install -r requirements.txt
 
 Universal Poison Armor can be installed natively into your AI agent or IDE as both a **behavioral skill** and an **MCP tool server**.
 
+### Glama (1-Click Install & Cloud Chat)
+
+You can use Universal Poison Armor directly in **Glama**:
+
+1. **Direct Web Usage / Chat**:
+   - Navigate to [Universal Poison Armor on Glama](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor).
+   - Click **Install Server** or launch it in [Glama Chat](https://glama.ai/chat).
+   - In the chat prompt, reference the server with `@Universal Poison Armor` (e.g. *"@Universal Poison Armor sanitize this document for adversarial prompt injection"*).
+
+2. **Claim & Deploy Releases on Glama**:
+   - The repository includes [`glama.json`](file:///f:/Universal-Poison-Armor/glama.json) for verified maintainer authorization.
+   - Maintainers can build container releases directly from the [Glama Dockerfile Admin](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor/admin/dockerfile).
+
+---
+
 ### Claude Code (Native Skill)
 
 1. **Install the skill natively**:
@@ -260,6 +279,7 @@ Universal Poison Armor is designed with an **adaptive transport resolver** that 
 |  Environment Detection       | Transport | Endpoints & Ports                           |
 +-----------------------------------------------------------------------------------------+
 |  Offline / Local Agents     | stdio     | stdin/stdout JSON-RPC (Claude, Cursor, AGY) |
+|  Glama (MCP Registry & Hub) | sse/stdio | glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor |
 |  CreateOS (NodeOps)         | sse       | 0.0.0.0:8080 (Auto-discovery mcp-tool.json)  |
 |  mcphosting.io              | sse       | 0.0.0.0:$PORT (/sse, /health, /manifest)    |
 |  Hugging Face Spaces        | sse       | 0.0.0.0:7860 (UID 1000 non-root user)       |
@@ -268,23 +288,29 @@ Universal Poison Armor is designed with an **adaptive transport resolver** that 
 +-----------------------------------------------------------------------------------------+
 ```
 
-### 1. CreateOS (NodeOps)
+### 1. Glama MCP Hub
+Deploy and interact with Universal Poison Armor on [Glama](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor):
+1. Verified maintainer control enabled via [`glama.json`](file:///f:/Universal-Poison-Armor/glama.json).
+2. One-click deploy & release via the [Glama Dockerfile Admin](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor/admin/dockerfile).
+3. Ready for immediate prompt testing and sanitization in [Glama Chat](https://glama.ai/chat).
+
+### 2. CreateOS (NodeOps)
 Deploy directly via GitHub or CLI:
 1. Connect your repository to [CreateOS](https://createos.sh) dashboard or run `createos deploy`.
 2. CreateOS automatically detects [`mcp-tool.json`](file:///f:/Universal-Poison-Armor/mcp-tool.json) and exposes tools via SSE on port `8080`.
 3. Connect your agent to `https://<your-app>.nodeops.app/sse`.
 
-### 2. mcphosting.io
+### 3. mcphosting.io
 1. Create a new service on [mcphosting.io](https://www.mcphosting.io/).
 2. Link your Git repository or deploy the Docker container.
 3. mcphosting automatically monitors `/health` and exposes your `/sse` endpoint.
 
-### 3. Hugging Face Spaces
+### 4. Hugging Face Spaces
 1. Create a **Docker** Space on [Hugging Face Spaces](https://huggingface.co/new-space).
 2. Push this repository; the container builds with pre-cached model weights and runs on port `7860`.
 3. Connect to `https://<user>-<space>.hf.space/sse`.
 
-### 4. Google Cloud Run / AWS App Runner
+### 5. Google Cloud Run / AWS App Runner
 Deploy as a containerized service:
 ```bash
 # Google Cloud Run
@@ -299,7 +325,7 @@ gcloud run deploy universal-poison-armor \
 # https://<cloud-run-url>/sse
 ```
 
-### 5. Local Offline Agent Usage (Claude Desktop, Cursor, Antigravity)
+### 6. Local Offline Agent Usage (Claude Desktop, Cursor, Antigravity)
 When executed locally without cloud environment variables, the server automatically defaults to **`stdio`** transport:
 ```json
 {

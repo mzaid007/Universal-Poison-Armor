@@ -158,18 +158,26 @@ def log_security_audit(threat_type: str, payload: str) -> None:
 @mcp.tool()
 def sanitize_document(document_text: str) -> str:
     """
-    Sanitize an incoming untrusted text document, file content, or RAG retrieval chunk against AI poisoning.
+    Sanitize an incoming untrusted text document, file content, user input, or RAG retrieval chunk against AI poisoning.
 
-    Strips Markdown XSS / tracking pixels, hidden zero-width Unicode steganography,
-    prompt injection patterns, and high-entropy adversarial suffixes (GCG attacks).
-    Logs all detected threats to `security_audit.json`.
+    Strips Markdown XSS tracking pixels, neutralizes hidden zero-width Unicode steganography,
+    redacts prompt injection phrases, and replaces high-entropy mathematical adversarial suffixes (GCG attacks).
+
+    Usage Guidelines:
+    - WHEN TO USE: Use on any individual raw text file, user-supplied prompt, single web page, or RAG chunk before ingesting it into the AI context window.
+    - WHEN NOT TO USE: Do NOT use for analyzing batches of documents for statistical dataset anomalies (use `scan_dataset_for_anomalies` instead) or verifying domain consensus across multiple news/search results (use `verify_article_consensus` instead).
+
+    Behavior & Side Effects:
+    - Replaces prompt injection patterns with `[REDACTED_INJECTION_ATTEMPT]`.
+    - Replaces high-entropy adversarial suffixes (Shannon entropy > 4.5) with `[ADVERSARIAL_SUFFIX_THREAT: REDACTED_HIGH_ENTROPY_BLOCK]`.
+    - Removes `![alt](url)` tracking images, `<img>`, and `<iframe>` tracking beacons.
+    - Appends timestamped threat events to `security_audit.json` in the root workspace directory.
 
     Args:
-        document_text: The raw untrusted text content to sanitize.
+        document_text: The raw untrusted string content to sanitize. If empty, returns an empty string.
 
     Returns:
-        The sanitized, safe string with malicious characters stripped, tracking pixels removed,
-        and injection phrases or adversarial suffixes redacted.
+        The sanitized, safe string with malicious tokens neutralized, tracking pixels stripped, and injections redacted.
     """
     if not document_text:
         return ""
@@ -210,16 +218,23 @@ def scan_dataset_for_anomalies(documents: List[str]) -> str:
     """
     Scan a collection of documents, training examples, or retrieved RAG items for semantic anomalies and poisoned clusters.
 
-    Uses sentence embeddings and Isolation Forests to detect statistical outliers that
-    diverge from the expected corpus distribution (often indicative of backdoor triggers
-    or adversarial poisoned data).
+    Uses dense sentence embeddings (`all-MiniLM-L6-v2`) and Isolation Forests to detect statistical outliers that
+    diverge from expected corpus distributions (identifying backdoor triggers, data poisoning, or trojans).
+
+    Usage Guidelines:
+    - WHEN TO USE: Use on collections, batches, or lists of documents (RAG retrieval sets, dataset splits, multi-file contents) to identify poisoned outlier clusters.
+    - WHEN NOT TO USE: Do NOT use for single-document regex sanitization, prompt injection stripping, or tracking pixel removal (use `sanitize_document` instead), nor for domain authority auditing across web search results (use `verify_article_consensus` instead).
+
+    Behavior & Side Effects:
+    - Computes dense vector embeddings locally (100% offline, privacy-preserving).
+    - Fits an Isolation Forest model and calculates centroid cosine distance metrics.
+    - Appends timestamped anomaly entries to `security_audit.json` when outliers are detected.
 
     Args:
-        documents: A list of text documents or context chunks to analyze.
+        documents: A list of text documents or context chunks to analyze for distribution anomalies.
 
     Returns:
-        A detailed security diagnostic report warning the AI of any detected semantic outliers,
-        their severity, anomaly scores, and recommended actions.
+        A detailed security diagnostic report listing total documents scanned, detected anomalies with severity (MODERATE, HIGH, CRITICAL), anomaly scores, excerpts, and quarantine recommendations.
     """
     total_docs = len(documents) if documents else 0
     if total_docs == 0:
@@ -271,19 +286,27 @@ def verify_article_consensus(articles: List[Dict[str, Any]]) -> str:
     """
     Verify web search results or news articles to defend against Consensus Poisoning and Sybil attacks.
 
-    Audits domain Top-Level Domains (checking for trusted authorities like .gov, .edu) and
+    Audits domain Top-Level Domains (validating trusted authorities like .gov, .edu) and
     calculates pairwise semantic cosine similarities to detect coordinated flooding campaigns
     where multiple untrusted sources syndicate near-identical (similarity > 0.95) fake consensus.
 
+    Usage Guidelines:
+    - WHEN TO USE: Use whenever 2 or more web search results, news articles, or online references are retrieved for a breaking topic, controversial issue, or factual query to verify that apparent consensus is not an artificial Sybil campaign.
+    - WHEN NOT TO USE: Do NOT use for individual document text sanitization (use `sanitize_document` instead) or unsupervised corpus outlier detection (use `scan_dataset_for_anomalies` instead).
+
+    Behavior & Side Effects:
+    - Audits domain provenance against verified authoritative TLDs (.gov, .edu, .mil, .int).
+    - Computes pairwise cosine similarity matrix across article embeddings.
+    - Appends timestamped alerts to `security_audit.json` if a coordinated Sybil attack is detected.
+
     Args:
-        articles: A list of article objects. Each object should contain:
+        articles: A list of article objects. Each object must be a dictionary containing:
                   - 'url' (str): The origin URL of the article.
                   - 'text' (str): The body or extracted content of the article.
-                  - (optional) 'title' (str): The title/headline of the article.
+                  - 'title' (str, optional): The headline/title of the article.
 
     Returns:
-        A strict security warning report if a coordinated Sybil attack or unverified flood is detected,
-        or a validation report confirming legitimate independent consensus.
+        A strict security warning report if a coordinated Sybil attack or unverified flood is detected with mandatory agent actions, or a verification confirmation report if consensus is authentic.
     """
     total_articles = len(articles) if articles else 0
     if total_articles == 0:
