@@ -5,6 +5,7 @@
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Protocol-purple.svg)](https://modelcontextprotocol.io/)
 [![FastMCP](https://img.shields.io/badge/FastMCP-Enabled-green.svg)](https://github.com/jlowin/fastmcp)
 [![Universal-Poison-Armor MCP server](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor/badges/score.svg)](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor)
+[![LobeHub MCP](https://lobehub.com/badge/mcp/mzaid007-universal-poison-armor)](https://lobehub.com/mcp/mzaid007-universal-poison-armor)
 [![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/mzaid007/universal-poison-armor)
 [![Security: AI Poison Defense](https://img.shields.io/badge/Security-AI%20Poison%20Defense-red.svg)](#)
 
@@ -30,15 +31,19 @@ Combines standard, native agentic behavioral directives (`SKILL.md`) with a high
 - [⚡ Quickstart & Installation](#-quickstart--installation)
 - [🤖 Native Agent & Skill Installation](#-native-agent--skill-installation)
   - [Glama (1-Click Install & Cloud Chat)](#glama-1-click-install--cloud-chat)
+  - [LobeChat / LobeHub (1-Click Install & Verification)](#lobechat--lobehub-1-click-install--verification)
+  - [Docker Container](#docker-container)
   - [Claude Code (Native Skill)](#claude-code-native-skill)
   - [Google Antigravity](#google-antigravity)
   - [Claude Desktop](#claude-desktop)
   - [Cursor IDE / Windsurf](#cursor-ide--windsurf)
   - [Cloud Deployment (Glama, Hugging Face, CreateOS, GCP, AWS)](#-universal-deployment-architecture)
-- [🛠️ Exposed MCP Tools](#️-exposed-mcp-tools)
+- [🛠️ Exposed MCP Primitives (Tools, Resources, Prompts)](#️-exposed-mcp-primitives-tools-resources-prompts)
   - [`sanitize_document`](#sanitize_document)
   - [`scan_dataset_for_anomalies`](#scan_dataset_for_anomalies)
   - [`verify_article_consensus`](#verify_article_consensus)
+  - [MCP Resources](#mcp-resources)
+  - [MCP Prompts](#mcp-prompts)
 - [📝 Security Audit Logs (`security_audit.json`)](#-security-audit-logs-security_auditjson)
 - [🐍 Python API Usage](#-python-api-usage)
 - [🔒 Security & Privacy Guarantees](#-security--privacy-guarantees)
@@ -191,6 +196,49 @@ You can use Universal Poison Armor directly in **Glama**:
 2. **Official Release & Container Deployment**:
    - The repository includes [`glama.json`](file:///f:/Universal-Poison-Armor/glama.json) for verified maintainer authorization.
    - Containerized releases (starting with `v1.0.0`) are automatically deployed and hosted via the [Glama Dockerfile Admin](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor/admin/dockerfile) with seamless `mcp-proxy` stdio bridging.
+
+---
+
+### LobeChat / LobeHub (1-Click Install & Verification)
+
+You can use Universal Poison Armor directly inside **LobeChat**:
+
+1. **Marketplace Installation**:
+   - Navigate to [Universal Poison Armor on LobeHub](https://lobehub.com/mcp/mzaid007-universal-poison-armor).
+   - Click **Install** to add the security suite directly to your LobeChat plugins.
+
+2. **Local Client Configuration**:
+   Add to your LobeChat MCP server configuration:
+   ```json
+   {
+     "universal-poison-armor": {
+       "command": "python",
+       "args": [
+         "skills/ai-poison-defense/src/server.py"
+       ],
+       "cwd": "/path/to/Universal-Poison-Armor"
+     }
+   }
+   ```
+
+---
+
+### Docker Container
+
+Run Universal Poison Armor in an isolated container without installing Python locally:
+
+```bash
+# Clone and build the image
+git clone https://github.com/mzaid007/Universal-Poison-Armor.git
+cd Universal-Poison-Armor
+docker build -t universal-poison-armor .
+
+# Run via stdio (for local MCP agents like Claude, Cursor, LobeChat)
+docker run -i --rm universal-poison-armor
+
+# Or run via SSE (for network/cloud access on port 8080)
+docker run -p 8080:8080 -e MCP_TRANSPORT=sse universal-poison-armor
+```
 
 ---
 
@@ -399,6 +447,28 @@ Defends against **Consensus Poisoning** and **Sybil Flooding** across multi-sour
   1. DO NOT cite or treat these flagged articles as independent consensus.
   2. Require corroboration strictly from verified, authoritative sources (.gov, .edu).
   ```
+
+---
+
+### MCP Resources
+
+Exposes active system security status and persistent audit trails to agents as standard MCP resources:
+
+| Resource URI | Description | MIME Type |
+|---|---|---|
+| `security://audit-log` | Real-time contents of the persistent security audit log (`security_audit.json`). | `application/json` |
+| `security://defense-policy` | Active detection thresholds (Shannon entropy, Isolation Forest contamination, Sybil bounds, trusted TLDs). | `application/json` |
+
+---
+
+### MCP Prompts
+
+Exposes standardized security assessment prompt templates for agentic workflows:
+
+| Prompt Name | Purpose | Arguments |
+|---|---|---|
+| `sanitize_untrusted_input` | Guides agents to sanitize untrusted files or RAG context before processing. | `untrusted_content` (string) |
+| `audit_dataset_security` | Guides agents to audit dataset collections or retrieval indices for poisoned anomalies. | `dataset_summary` (string) |
 
 ---
 

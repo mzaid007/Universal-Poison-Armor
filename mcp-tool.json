@@ -72,5 +72,43 @@
         "required": ["articles"]
       }
     }
+  ],
+  "resources": [
+    {
+      "uri": "security://audit-log",
+      "name": "Security Audit Log",
+      "description": "Exposes the persistent local security_audit.json audit trail as an MCP resource.",
+      "mimeType": "application/json"
+    },
+    {
+      "uri": "security://defense-policy",
+      "name": "Defense Policy & Thresholds",
+      "description": "Active AI poison defense parameters, Shannon entropy threshold, and detection rules.",
+      "mimeType": "application/json"
+    }
+  ],
+  "prompts": [
+    {
+      "name": "sanitize_untrusted_input",
+      "description": "Security-focused prompt template guiding the agent to sanitize and inspect untrusted input.",
+      "arguments": [
+        {
+          "name": "untrusted_content",
+          "description": "The raw untrusted text content to sanitize.",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "audit_dataset_security",
+      "description": "Security audit prompt template for scanning document collections for poisoned samples.",
+      "arguments": [
+        {
+          "name": "dataset_summary",
+          "description": "Summary or overview of the dataset to audit.",
+          "required": true
+        }
+      ]
+    }
   ]
 }
