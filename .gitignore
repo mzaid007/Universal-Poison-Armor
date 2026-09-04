@@ -31,6 +31,8 @@ Thumbs.db
 # Model and cache files
 .cache/
 hf_cache/
+models/
+*.onnx
 
 # Runtime security audit log files
 security_audit.jsonl*

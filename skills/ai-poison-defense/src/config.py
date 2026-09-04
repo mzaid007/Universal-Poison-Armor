@@ -47,7 +47,7 @@ class PoisonArmorConfig:
         )
     )
     auto_download_onnx: bool = field(
-        default_factory=lambda: _bool_from_env("POISON_ARMOR_AUTO_DOWNLOAD_ONNX", False)
+        default_factory=lambda: _bool_from_env("POISON_ARMOR_AUTO_DOWNLOAD_ONNX", True)
     )
     onnx_model_id: str = field(
         default_factory=lambda: os.environ.get(

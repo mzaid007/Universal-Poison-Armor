@@ -68,8 +68,24 @@ def download_and_export(
         logger.info("PyTorch model saved to %s", out_path)
         return out_path
 
-    # Export to ONNX
-    logger.info("Attempting ONNX export for '%s'...", model_id)
+    # Export or Fetch ONNX
+    logger.info("Attempting ONNX acquisition for '%s'...", model_id)
+
+    # Strategy 0: Direct download of pre-built ONNX file from Hugging Face Hub if available
+    try:
+        from huggingface_hub import hf_hub_download
+        import shutil
+        for cand_file in ["onnx/model.onnx", "model.onnx"]:
+            try:
+                cached_onnx = hf_hub_download(repo_id=model_id, filename=cand_file)
+                if cached_onnx and os.path.exists(cached_onnx):
+                    shutil.copyfile(cached_onnx, str(onnx_file_path))
+                    logger.info("Directly acquired pre-built ONNX model from Hugging Face: %s", onnx_file_path)
+                    return out_path
+            except Exception:
+                pass
+    except Exception as hf_err:
+        logger.debug("Direct HF hub ONNX download skipped (%s)...", hf_err)
 
     # Strategy 1: Optimum ORTModel if available
     try:
