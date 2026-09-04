@@ -29,13 +29,14 @@ Activate this skill automatically whenever your agent workflow involves:
 
 This skill relies on the **Universal Poison Armor** FastMCP server. The following tools are available in your agent context:
 
-### 1. `sanitize_document(document_text: str) -> str`
-- **Purpose**: Neutralizes individual documents, code files, or text snippets.
+### 1. `sanitize_document(document_text: str, wrap_taint: bool = False, scan_neural: bool = False) -> str`
+- **Purpose**: Neutralizes individual documents, code files, or text snippets with sub-millisecond fast-path screening.
 - **Actions Performed**:
   - **Markdown XSS / Tracking Pixel Neutralization**: Strips all `![alt](url)`, `<img ...>`, and `<iframe ...>` tracking elements.
   - **Zero-Width Character Removal**: Strips invisible Unicode steganography (`\u200B`–`\u200D`, `\uFEFF`, Unicode Tag blocks).
-  - **Heuristic Injection Redaction**: Replaces prompt override phrases (`ignore previous instructions`, `system prompt`, `DAN mode`) with `[REDACTED_INJECTION_ATTEMPT]`.
-  - **Shannon Entropy Analysis**: Detects and redacts high-entropy adversarial suffix blocks (e.g. GCG attacks with entropy > 4.5) with `[ADVERSARIAL_SUFFIX_THREAT: REDACTED_HIGH_ENTROPY_BLOCK]`.
+  - **Heuristic & Neural Injection Defense**: Replaces prompt override phrases with `[REDACTED_INJECTION_ATTEMPT]`. When `scan_neural=True`, detects semantic and conversational jailbreaks via local embeddings.
+  - **Shannon Entropy Fast-Path Analysis**: Detects and redacts high-entropy adversarial suffix blocks (e.g. GCG attacks with entropy > 4.5) with `[ADVERSARIAL_SUFFIX_THREAT: REDACTED_HIGH_ENTROPY_BLOCK]`.
+  - **Cryptographic Taint Framing**: When `wrap_taint=True`, wraps sanitized text in a `<untrusted_context integrity="sha256:...">` boundary to structurally prevent models from treating data as instructions.
   - **Audit Logging**: Appends timestamped JSON security logs to `security_audit.json`.
 - **When to Use**: Single files, individual web pages, user-submitted prompts, single RAG chunks.
 

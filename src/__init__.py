@@ -1,6 +1,12 @@
 """
-Root level wrapper for PoisonDefenseEngine
+Root level package for Universal Poison Armor
 """
-from skills.ai_poison_defense.src.sanitizers import PoisonDefenseEngine  # type: ignore
+from .sanitizers import PoisonDefenseEngine
+from .middleware import PoisonArmorMiddleware, PoisonArmorClient, wrap_openai
 
-__all__ = ["PoisonDefenseEngine"]
+__all__ = [
+    "PoisonDefenseEngine",
+    "PoisonArmorMiddleware",
+    "PoisonArmorClient",
+    "wrap_openai",
+]

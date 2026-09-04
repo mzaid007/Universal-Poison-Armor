@@ -156,7 +156,11 @@ def log_security_audit(threat_type: str, payload: str) -> None:
 
 
 @mcp.tool()
-def sanitize_document(document_text: str) -> str:
+def sanitize_document(
+    document_text: str,
+    wrap_taint: bool = False,
+    scan_neural: bool = False,
+) -> str:
     """
     Sanitize an incoming untrusted text document, file content, user input, or RAG retrieval chunk against AI poisoning.
 
@@ -172,9 +176,13 @@ def sanitize_document(document_text: str) -> str:
     - Replaces high-entropy adversarial suffixes (Shannon entropy > 4.5) with `[ADVERSARIAL_SUFFIX_THREAT: REDACTED_HIGH_ENTROPY_BLOCK]`.
     - Removes `![alt](url)` tracking images, `<img>`, and `<iframe>` tracking beacons.
     - Appends timestamped threat events to `security_audit.json` in the root workspace directory.
+    - Optionally wraps sanitized text with cryptographic taint boundaries (`<untrusted_context integrity="...">`) when `wrap_taint=True`.
+    - Optionally evaluates semantic neural injection similarity when `scan_neural=True`.
 
     Args:
         document_text: The raw untrusted string content to sanitize. If empty, returns an empty string.
+        wrap_taint: If True, wraps output inside a cryptographic taint boundary delimiter.
+        scan_neural: If True, evaluates text against local neural semantic injection embeddings.
 
     Returns:
         The sanitized, safe string with malicious tokens neutralized, tracking pixels stripped, and injections redacted.
@@ -182,7 +190,7 @@ def sanitize_document(document_text: str) -> str:
     if not document_text:
         return ""
 
-    logger.info("Sanitizing document (%d characters)...", len(document_text))
+    logger.info("Sanitizing document (%d characters, wrap_taint=%s, scan_neural=%s)...", len(document_text), wrap_taint, scan_neural)
     raw_input = document_text
     detected_threats: List[str] = []
 
@@ -191,8 +199,12 @@ def sanitize_document(document_text: str) -> str:
     if xss_cleaned != raw_input:
         detected_threats.append("MARKDOWN_XSS_TRACKING_PIXEL")
 
-    # 2. Strip zero-width Unicode characters, redact prompt injections, and detect adversarial suffixes
-    fully_sanitized = engine.strip_injections(xss_cleaned)
+    # 2. Strip zero-width Unicode characters, redact prompt injections, detect adversarial suffixes, and apply neural/taint options
+    fully_sanitized = engine.strip_injections(
+        xss_cleaned,
+        wrap_taint=wrap_taint,
+        check_neural=scan_neural,
+    )
 
     # Check if prompt injection phrases were redacted
     if "[REDACTED_INJECTION_ATTEMPT]" in fully_sanitized:
