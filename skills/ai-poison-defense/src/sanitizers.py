@@ -19,6 +19,7 @@ Key Capabilities:
 
 from __future__ import annotations
 
+import base64
 from collections import Counter
 import hashlib
 import logging
@@ -26,7 +27,7 @@ import math
 import os
 import re
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -38,6 +39,15 @@ try:
 except ImportError:
     ort = None
     HAS_ONNX = False
+
+try:
+    from src.config import PoisonArmorConfig, get_config
+except ImportError:
+    try:
+        from config import PoisonArmorConfig, get_config
+    except ImportError:
+        PoisonArmorConfig = None  # type: ignore
+        get_config = None  # type: ignore
 
 # Configure structured logging
 logger = logging.getLogger(__name__)
@@ -89,23 +99,110 @@ class PoisonDefenseEngine:
     # Standardized marker for detected adversarial suffix threats (e.g. GCG gibberish)
     ADVERSARIAL_SUFFIX_MARKER = "[ADVERSARIAL_SUFFIX_THREAT: REDACTED_HIGH_ENTROPY_BLOCK]"
 
+    # Standardized marker for detected obfuscated (Base64/URL/Hex) injection payloads
+    OBFUSCATED_REDACTION_MARKER = "[REDACTED_OBFUSCATED_INJECTION_ATTEMPT]"
+
+    # Standardized marker for intercepted model egress secret leaks
+    SECRET_REDACTION_MARKER = "[REDACTED_SECRET_LEAK]"
+
+    # Repetitive adversarial punctuation pattern characteristic of GCG suffix attacks
+    REPETITIVE_ADVERSARIAL_PATTERN = re.compile(
+        r"(?:[!@#$%^&*~`|}{[\]?><;]\s*){6,}"
+    )
+
     # Heuristic pattern signatures targeting common prompt injection, role-play overrides, and jailbreak vectors
     INJECTION_PATTERNS = [
-        # Instruction override directives
+        # Instruction override directives (English)
         re.compile(
             r"(?i)\b(?:ignore|disregard|forget|override|bypass|cancel|drop|negate)\s+"
-            r"(?:all\s+|any\s+|the\s+|prior\s+|earlier\s+|above\s+)*"
-            r"(?:previous\s+|prior\s+|earlier\s+|above\s+)*"
-            r"(?:instructions|directions|prompts|rules|commands|constraints|directives|guidelines)\b"
+            r"(?:all\s+|any\s+|the\s+|your\s+|these\s+|prior\s+|earlier\s+|above\s+)*"
+            r"(?:previous\s+|prior\s+|earlier\s+|above\s+|system\s+|safety\s+|original\s+)*"
+            r"(?:instructions|directions|prompts|rules|commands|constraints|directives|guidelines|filters|safeguards|restrictions|security)\b"
+        ),
+        re.compile(
+            r"(?i)\b(?:do\s+not\s+follow|stop\s+following|disobey)\s+"
+            r"(?:the\s+|any\s+)?(?:original\s+|initial\s+|system\s+)?(?:guidelines|rules|instructions)\b"
+        ),
+        re.compile(
+            r"(?i)\b(?:no\s+longer\s+bound|free\s+from\s+(?:all\s+)?constraints|break\s+free\s+of)\b"
+        ),
+        re.compile(
+            r"(?i)\b(?:system\s+override|system\s+reset|clear\s+(?:the\s+)?memory\s+context|assume\s+superuser)\b"
+        ),
+        # Instruction override directives (Spanish)
+        re.compile(
+            r"(?i)\b(?:ignora|olvida|omite|desregula)\s+"
+            r"(?:todas\s+|las\s+|cualquier\s+|los\s+|mis\s+)*"
+            r"(?:instrucciones|reglas|indicaciones|directivas)\s*"
+            r"(?:anteriores|previas)?\b"
+        ),
+        # Instruction override directives (German)
+        re.compile(
+            r"(?i)\b(?:ignoriere|vergiss|übergehe|verwerfe)\s+"
+            r"(?:alle\s+|jede\s+|die\s+)*(?:vorherigen\s+|bisherigen\s+|obigen\s+)*"
+            r"(?:anweisungen|regeln|richtlinien|befehle|instruktionen|systemanweisungen)\b"
+        ),
+        # Instruction override directives (French)
+        re.compile(
+            r"(?i)\b(?:ignore[rz]?|oublie[rz]?|outrepasse[rz]?)\s+"
+            r"(?:toutes?\s+|les\s+|vos\s+|mes\s+|ces\s+)*"
+            r"(?:instructions|directives|r[eè]gles)\s*"
+            r"(?:pr[eé]c[eé]dentes|ant[eé]rieures)?\b"
+        ),
+        # Instruction override directives (Russian)
+        re.compile(
+            r"(?i)\b(?:игнорируй|забудь|отмени|пропусти)\s+"
+            r"(?:все\s+|предыдущие\s+|эти\s+)*"
+            r"(?:инструкции|правила|указания)\b"
+        ),
+        # Instruction override directives (Chinese)
+        re.compile(
+            r"(?i)(?:忽略|无视|丢弃|覆盖|重置|取消)[\u4e00-\u9fa5\s]{0,12}(?:指令|提示|设定|规则|要求|指示|系统)"
+        ),
+        # Instruction override directives (Arabic)
+        re.compile(
+            r"(?i)(?:تجاهل|انس|الغ|تخطى)\s+(?:جميع\s+|كل\s+|ال)?(?:التعليمات|الأوامر|القواعد|التوجيهات|موجه)"
+        ),
+        # Instruction override directives (Japanese)
+        re.compile(
+            r"(?i)(?:無視|忘れて|上書き|破棄|従わない)[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\s]{0,12}(?:指示|ルール|命令|プロンプト|制約)"
+        ),
+        re.compile(
+            r"(?i)(?:指示|ルール|命令|プロンプト|制約)[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\s]{0,12}(?:無視|忘れて|上書き|破棄|従わない|無効)"
+        ),
+        # Instruction override directives (Hindi)
+        re.compile(
+            r"(?i)(?:अनदेखा\s+करें|भूल\s+जाएं|अमान्य\s+करें|रद्द\s+करें|उल्लंघन\s+करें)[\u0900-\u097F\s]{0,15}(?:निर्देश|नियम|आदेश|प्रॉम्प्ट)"
+        ),
+        re.compile(
+            r"(?i)(?:निर्देश|नियम|आदेश|प्रॉम्प्ट)[\u0900-\u097F\s]{0,15}(?:अनदेखा|भूल|अमान्य|रद्द|उल्लंघन)"
+        ),
+        # Instruction override directives (Portuguese)
+        re.compile(
+            r"(?i)\b(?:desconsidere|ignore|esque[çc]a|cancele)\s+"
+            r"(?:todas?\s+|as\s+|os\s+|quaisquer\s+)*(?:instru[çc][õo]es|regras|diretrizes)\s*"
+            r"(?:anteriores|pr[eé]vias)?\b"
+        ),
+        # Instruction override directives (Italian)
+        re.compile(
+            r"(?i)\b(?:ignora|dimentica|annulla|salta)\s+"
+            r"(?:tutte?\s+|le\s+|gli\s+|i\s+)*(?:istruzioni|regole|direttive)\s*"
+            r"(?:precedenti)?\b"
         ),
         # System prompt leakage and role overrides
         re.compile(
             r"(?i)\b(?:system\s+prompt|system\s+instructions|system\s+directive|developer\s+instructions|core\s+prompt)\b"
         ),
-        # Role-play & jailbreak persona switches (e.g. DAN, GodMode, EvilBot)
+        # Role-play & jailbreak persona switches (e.g. DAN, GodMode, EvilBot, AIM)
         re.compile(
             r"(?i)\b(?:you\s+are\s+now|act\s+as|pretend\s+to\s+be|roleplay\s+as)\s+"
-            r"(?:an?\s+)?(?:unrestricted|jailbroken|unfiltered|DAN|evil|godmode|developer\s+mode|unaligned)\b"
+            r"(?:an?\s+)?(?:unrestricted|jailbroken|unfiltered|DAN|AIM|evil|godmode|developer\s+mode|unaligned|chaosgpt)\b"
+        ),
+        re.compile(
+            r"(?i)\b(?:pretend\s+to\s+be\s+an?\s+ai\s+without\s+(?:any\s+)?ethics|without\s+any\s+ethics)\b"
+        ),
+        re.compile(
+            r"(?i)\b(?:uncensored\s+jailbreak|opposite\s+day|offensive\s+security\s+tool)\b"
         ),
         # Unconstrained execution triggers
         re.compile(
@@ -125,6 +222,30 @@ class PoisonDefenseEngine:
         re.compile(
             r"(?i)<\s*(?:script|system_override|admin_command|prompt_injection|system|developer)\s*>.*?</\s*(?:script|system_override|admin_command|prompt_injection|system|developer)\s*>"
         ),
+    ]
+
+    # Patterns targeting sensitive API keys, cloud credentials, and private keys in model outputs (Egress)
+    EGRESS_SECRET_PATTERNS = [
+        # OpenAI API Keys
+        re.compile(r"\b(?:sk-[a-zA-Z0-9_-]{20,})\b"),
+        # Anthropic API Keys
+        re.compile(r"\b(?:sk-ant-[a-zA-Z0-9_-]{20,})\b"),
+        # GitHub Personal Access Tokens & OAuth
+        re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{36,255}|github_pat_[A-Za-z0-9_]{82})\b"),
+        # AWS Access Key IDs
+        re.compile(r"\b(A3T[A-Z0-9]|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16})\b"),
+        # Slack Tokens
+        re.compile(r"\b(?:xox[baprs]-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*)\b"),
+        # Hugging Face Access Tokens
+        re.compile(r"\b(?:hf_[A-Za-z0-9]{30,})\b"),
+        # Stripe Secret Keys (Live & Test)
+        re.compile(r"\b(?:sk_(?:live|test)_[0-9a-zA-Z]{24,})\b"),
+        # Google OAuth Tokens
+        re.compile(r"\b(?:ya29\.[a-zA-Z0-9_-]{20,})\b"),
+        # Generic Bearer Tokens / JWTs
+        re.compile(r"\beyJ[A-Za-z0-9-_=]+\.eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_.+/=]+\b"),
+        # Private Keys
+        re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]+?-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"),
     ]
 
     # Markdown XSS, tracking pixel, and embedded iframe patterns
@@ -170,31 +291,59 @@ class PoisonDefenseEngine:
         re.IGNORECASE,
     )
 
+    # Direct command words and imperative verbs characteristic of prompt injection directives
+    IMPERATIVE_COMMAND_WORDS: Set[str] = {
+        "ignore", "disregard", "forget", "override", "bypass", "cancel", "drop",
+        "must", "obey", "command", "directive", "rule", "instruction", "instructions",
+        "act", "pretend", "roleplay", "dan", "jailbreak", "unrestricted",
+        "reveal", "dump", "leak", "secret", "password", "token", "key",
+        "system", "developer", "sudo", "admin", "prompt", "prompts",
+    }
+
     def __init__(
         self,
         model_name: str = "all-MiniLM-L6-v2",
         contamination: Union[float, str] = 0.1,
         random_state: int = 42,
-        entropy_threshold: float = 4.5,
+        entropy_threshold: Optional[float] = None,
         onnx_model_path: Optional[str] = None,
+        max_document_size: Optional[int] = None,
+        max_batch_size: Optional[int] = None,
+        config: Optional[Any] = None,
     ) -> None:
         """
         Initialize the Poison Defense Engine with local embedding model, Isolation Forest,
-        and Shannon Entropy threshold settings.
-
-        Args:
-            model_name: HuggingFace sentence-transformers model identifier or local path.
-                        Defaults to 'all-MiniLM-L6-v2' (lightweight, fast, 384-dimensional).
-            contamination: Expected proportion of outliers (default: 0.1).
-            random_state: Random state seed for deterministic, reproducible results.
-            entropy_threshold: Shannon entropy cutoff above which text blocks are flagged as adversarial suffixes (default: 4.5).
-            onnx_model_path: Optional path to an ONNX model for high-speed prompt injection classification.
+        Shannon Entropy threshold, and DoS safety limits.
         """
+        cfg = config or (get_config() if get_config else None)
+
         self.model_name = model_name
         self.contamination = contamination
         self.random_state = random_state
-        self.entropy_threshold = entropy_threshold
-        self.onnx_model_path = onnx_model_path or os.environ.get("ONNX_PROMPT_INJECTION_PATH")
+        self.entropy_threshold = (
+            entropy_threshold
+            if entropy_threshold is not None
+            else (cfg.entropy_threshold if cfg else 4.5)
+        )
+        self.neural_threshold = cfg.neural_threshold if cfg else 0.45
+        self.check_neural_default = cfg.check_neural if cfg else True
+        self.dry_run_default = cfg.dry_run if cfg else False
+        self.max_document_size = (
+            max_document_size
+            if max_document_size is not None
+            else (cfg.max_document_size if cfg else 5 * 1024 * 1024)
+        )
+        self.max_batch_size = (
+            max_batch_size
+            if max_batch_size is not None
+            else (cfg.max_batch_size if cfg else 500)
+        )
+
+        resolved_onnx = onnx_model_path or os.environ.get("ONNX_PROMPT_INJECTION_PATH") or (cfg.onnx_model_path if cfg else None)
+        if resolved_onnx and os.path.exists(resolved_onnx):
+            self.onnx_model_path = resolved_onnx
+        else:
+            self.onnx_model_path = None
 
         logger.info(
             "Initializing PoisonDefenseEngine with embedding model: '%s' and entropy_threshold: %0.2f...",
@@ -365,6 +514,7 @@ class PoisonDefenseEngine:
 
         Catches indirect attacks, conversational jailbreaks, and instructions that have
         natural English entropy and lack explicit regex keywords.
+        Uses imperative syntax gating to avoid false positives on benign prose.
 
         Args:
             text: The text snippet to evaluate.
@@ -384,13 +534,118 @@ class PoisonDefenseEngine:
         max_idx = int(np.argmax(sims))
         max_sim = float(sims[max_idx])
 
-        is_inj = bool(max_sim >= threshold)
+        # Imperative syntax gating: check if direct command words exist
+        words = set(re.findall(r"\b[a-zA-Z]+\b", clean.lower()))
+        has_command = bool(words & self.IMPERATIVE_COMMAND_WORDS)
+        effective_threshold = threshold if has_command else max(threshold + 0.20, 0.65)
+
+        is_inj = bool(max_sim >= effective_threshold)
         return {
             "is_injection": is_inj,
             "confidence": round(max_sim, 4),
             "method": "local_semantic_embedding",
             "matched_intent": self.INJECTION_ANCHORS[max_idx] if is_inj else None,
         }
+
+    def decode_obfuscated_payloads(self, text: str) -> Tuple[str, List[str]]:
+        """
+        Detects and decodes obfuscated (Base64, Hex, URL-encoded) payloads inside text.
+        If a decoded payload contains prompt injection instructions or zero-width evasion tokens,
+        replaces the encoded payload with [REDACTED_OBFUSCATED_INJECTION_ATTEMPT].
+
+        Args:
+            text: Input text string.
+
+        Returns:
+            Tuple of (sanitized_text, list_of_detected_threats).
+        """
+        if not text:
+            return text, []
+
+        detected_threats: List[str] = []
+        sanitized = text
+
+        # 1. Base64 payload detection (alphanumeric sequences length >= 20 with optional valid padding)
+        b64_candidate_pattern = re.compile(r"(?<![A-Za-z0-9+/])([A-Za-z0-9+/]{20,}={0,2})(?![A-Za-z0-9+/=])")
+        for match in b64_candidate_pattern.finditer(text):
+            candidate = match.group(1)
+            if self.UUID_PATTERN.match(candidate) or self.API_KEY_PREFIX_PATTERN.match(candidate):
+                continue
+            try:
+                decoded_bytes = base64.b64decode(candidate, validate=True)
+                decoded_text = decoded_bytes.decode("utf-8", errors="ignore").strip()
+                if len(decoded_text) >= 8:
+                    is_inj = any(pat.search(decoded_text) for pat in self.INJECTION_PATTERNS)
+                    if not is_inj and len(decoded_text) >= 15:
+                        neural_eval = self.detect_neural_injection(decoded_text, threshold=0.45)
+                        is_inj = neural_eval["is_injection"]
+                    if is_inj or self.ZERO_WIDTH_PATTERN.search(decoded_text):
+                        sanitized = sanitized.replace(candidate, self.OBFUSCATED_REDACTION_MARKER)
+                        detected_threats.append("OBFUSCATED_BASE64_INJECTION")
+            except Exception:
+                pass
+
+        # 2. URL-encoded payload detection (contains %xx sequences)
+        if "%" in sanitized and re.search(r"%[0-9a-fA-F]{2}", sanitized):
+            try:
+                unquoted = unquote(sanitized)
+                if unquoted != sanitized:
+                    is_inj = any(pat.search(unquoted) for pat in self.INJECTION_PATTERNS)
+                    if is_inj:
+                        sanitized = self.OBFUSCATED_REDACTION_MARKER
+                        detected_threats.append("OBFUSCATED_URL_INJECTION")
+            except Exception:
+                pass
+
+        # 3. Hex payload detection (hex sequences length >= 16)
+        hex_candidate_pattern = re.compile(r"\b([0-9a-fA-F]{16,})\b")
+        for match in hex_candidate_pattern.finditer(text):
+            candidate = match.group(1)
+            if len(candidate) % 2 != 0 or self.UUID_PATTERN.match(candidate):
+                continue
+            try:
+                decoded_bytes = bytes.fromhex(candidate)
+                decoded_text = decoded_bytes.decode("utf-8", errors="ignore").strip()
+                if len(decoded_text) >= 8:
+                    is_inj = any(pat.search(decoded_text) for pat in self.INJECTION_PATTERNS)
+                    if not is_inj and len(decoded_text) >= 15:
+                        neural_eval = self.detect_neural_injection(decoded_text, threshold=0.45)
+                        is_inj = neural_eval["is_injection"]
+                    if is_inj or self.ZERO_WIDTH_PATTERN.search(decoded_text):
+                        sanitized = sanitized.replace(candidate, self.OBFUSCATED_REDACTION_MARKER)
+                        detected_threats.append("OBFUSCATED_HEX_INJECTION")
+            except Exception:
+                pass
+
+        return sanitized, detected_threats
+
+    def filter_egress_leaks(self, text: str) -> Tuple[str, List[str]]:
+        """
+        Scans LLM model output completions for sensitive credential leaks, API keys,
+        private keys, and generated Markdown tracking pixels before emitting responses.
+
+        Args:
+            text: Raw model generation or response string.
+
+        Returns:
+            Tuple of (sanitized_response: str, detected_leaks: List[str]).
+        """
+        if not text:
+            return "", []
+
+        detected_leaks: List[str] = []
+        # Strip tracking pixels or iframe beacons
+        sanitized = self.strip_markdown_xss(text)
+        if sanitized != text:
+            detected_leaks.append("EGRESS_TRACKING_PIXEL")
+
+        # Redact API keys, AWS credentials, JWTs, private keys
+        for pat in self.EGRESS_SECRET_PATTERNS:
+            if pat.search(sanitized):
+                sanitized = pat.sub(self.SECRET_REDACTION_MARKER, sanitized)
+                detected_leaks.append("EGRESS_SECRET_CREDENTIAL_LEAK")
+
+        return sanitized, detected_leaks
 
     def is_adversarial_block(self, text: str) -> bool:
         """
@@ -496,43 +751,165 @@ class PoisonDefenseEngine:
 
         return sanitized.strip()
 
+    def evaluate_document(self, text: str) -> Dict[str, Any]:
+        """
+        Non-destructive security evaluation and scoring.
+        Scans text across all layers (XSS, zero-width, de-obfuscation, neural injection, adversarial entropy)
+        and returns a detailed risk assessment report without modifying the input text.
+        """
+        if not text:
+            return {
+                "is_safe": True,
+                "threat_score": 0.0,
+                "threat_count": 0,
+                "threats": [],
+                "sanitized_preview": "",
+                "original_length": 0,
+            }
+
+        threats: List[Dict[str, Any]] = []
+
+        # 1. XSS / Tracking pixels
+        xss_cleaned = self.strip_markdown_xss(text)
+        if xss_cleaned != text:
+            threats.append({
+                "layer": "XSS_TRACKING_PIXEL",
+                "threat_type": "MARKDOWN_XSS_TRACKING_PIXEL",
+                "severity": "HIGH",
+                "details": "Detected Markdown images, HTML img, or iframe tracking beacons",
+            })
+
+        # 2. De-obfuscation (Base64, Hex, URL)
+        _, obf_threats = self.decode_obfuscated_payloads(text)
+        for obf in obf_threats:
+            threats.append({
+                "layer": "DEOBFUSCATION",
+                "threat_type": obf,
+                "severity": "CRITICAL",
+                "details": f"Detected obfuscated injection payload ({obf})",
+            })
+
+        # 3. Zero-width Unicode
+        if self.ZERO_WIDTH_PATTERN.search(text):
+            threats.append({
+                "layer": "UNICODE_STEGANOGRAPHY",
+                "threat_type": "ZERO_WIDTH_STEGANOGRAPHY",
+                "severity": "HIGH",
+                "details": "Detected invisible or zero-width Unicode steganography tokens",
+            })
+
+        # 4. Regex injection signatures
+        for pat in self.INJECTION_PATTERNS:
+            match = pat.search(text)
+            if match:
+                threats.append({
+                    "layer": "HEURISTIC_REGEX",
+                    "threat_type": "PROMPT_INJECTION_ATTEMPT",
+                    "severity": "CRITICAL",
+                    "details": f"Matched prompt injection signature: '{match.group(0)[:60]}'",
+                })
+
+        # 5. Neural Semantic Intent Scoring
+        neural_eval = self.detect_neural_injection(text, threshold=self.neural_threshold)
+        if neural_eval["is_injection"]:
+            threats.append({
+                "layer": "NEURAL_SEMANTIC",
+                "threat_type": "SEMANTIC_PROMPT_INJECTION",
+                "severity": "CRITICAL",
+                "confidence": neural_eval["confidence"],
+                "details": f"Semantic cosine similarity {neural_eval['confidence']} matched intent: {neural_eval['matched_intent']}",
+            })
+
+        # 6. Adversarial Suffix Entropy & Symbol Repetition
+        if self.REPETITIVE_ADVERSARIAL_PATTERN.search(text):
+            threats.append({
+                "layer": "SHANNON_ENTROPY",
+                "threat_type": "ADVERSARIAL_SUFFIX_THREAT",
+                "severity": "CRITICAL",
+                "details": "Repetitive adversarial symbol pattern detected (GCG attack vector)",
+            })
+        else:
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped and (set(stripped) & self.ADVERSARIAL_SPECIAL_SYMBOLS):
+                    if (" " not in stripped and len(stripped) >= 15 and self.is_adversarial_block(stripped)) or \
+                       any(len(tok) >= 15 and self.is_adversarial_block(tok) for tok in stripped.split()):
+                        threats.append({
+                            "layer": "SHANNON_ENTROPY",
+                            "threat_type": "ADVERSARIAL_SUFFIX_THREAT",
+                            "severity": "CRITICAL",
+                            "details": "Mathematical high-entropy adversarial suffix detected (GCG attack)",
+                        })
+                        break
+
+        sanitized_version = self.strip_injections(xss_cleaned, check_neural=False)
+
+        # Risk score calculation
+        if not threats:
+            risk_score = 0.0
+        elif any(t.get("severity") == "CRITICAL" for t in threats):
+            risk_score = 0.95
+        elif any(t.get("severity") == "HIGH" for t in threats):
+            risk_score = 0.70
+        else:
+            risk_score = 0.40
+
+        return {
+            "is_safe": len(threats) == 0,
+            "threat_score": round(risk_score, 2),
+            "threat_count": len(threats),
+            "threats": threats,
+            "sanitized_preview": sanitized_version[:500],
+            "original_length": len(text),
+        }
+
     def strip_injections(
         self,
         text: str,
         wrap_taint: bool = False,
-        check_neural: bool = False,
-        neural_threshold: float = 0.55,
+        check_neural: Optional[bool] = None,
+        neural_threshold: Optional[float] = None,
         source: str = "untrusted",
+        dry_run: bool = False,
     ) -> str:
         """
         Sanitizes a document or prompt by stripping invisible/zero-width Unicode
         characters, redacting known prompt injection attack phrases, and detecting
         adversarial suffix attacks via layered Shannon Entropy & token analysis.
 
-        Workflow:
-        1. Strips all zero-width and invisible steganographic Unicode sequences.
-        2. Applies compiled regex patterns targeting known prompt injection phrases.
-        3. Analyzes Shannon Entropy and character diversity of distinct blocks and tokens.
-           Uses fast-path screening (only evaluating lines with adversarial punctuation).
-           If an adversarial suffix (> 4.5 entropy with corroborating attack signals)
-           is detected and not in the legitimate allowlist, it is redacted with
-           `[ADVERSARIAL_SUFFIX_THREAT: REDACTED_HIGH_ENTROPY_BLOCK]`.
-        4. Optionally evaluates semantic neural injection similarity.
-        5. Cleans and normalizes redundant whitespace and repeated markers.
-        6. Optionally wraps sanitized text in a cryptographic taint boundary.
-
         Args:
             text: The raw input string to sanitize.
             wrap_taint: If True, wraps result in <untrusted_context integrity="..."> delimiters.
-            check_neural: If True, performs local neural semantic injection scoring.
-            neural_threshold: Similarity cutoff for neural injection detection (default: 0.55).
+            check_neural: If True, performs local neural semantic injection scoring (defaults to config).
+            neural_threshold: Similarity cutoff for neural injection detection (defaults to config).
             source: Source label for taint wrapping.
+            dry_run: If True, returns text unmodified (auditing/scoring mode).
 
         Returns:
-            Sanitized safe string with harmful tokens neutralized.
+            Sanitized safe string with harmful tokens neutralized (or original if dry_run).
         """
         if not text:
             return ""
+
+        if dry_run:
+            if wrap_taint:
+                return self.wrap_taint_boundary(text, source=source)
+            return text
+
+        should_check_neural = self.check_neural_default if check_neural is None else check_neural
+        eff_neural_threshold = self.neural_threshold if neural_threshold is None else neural_threshold
+
+        # Step 0: Input Size Cap & DoS Guardrail
+        if len(text) > self.max_document_size:
+            logger.warning(
+                "Input exceeded maximum allowed document size (%d > %d). Truncating.",
+                len(text),
+                self.max_document_size,
+            )
+            text = text[: self.max_document_size] + "\n[SECURITY_ALERT: INPUT_TRUNCATED_EXCEEDED_MAX_SIZE]"
+
+        # Step 0b: De-obfuscate embedded Base64, Hex, and URL-encoded injection payloads
+        text, _ = self.decode_obfuscated_payloads(text)
 
         # Step 1: Strip zero-width, invisible, and malicious directional Unicode characters
         sanitized = self.ZERO_WIDTH_PATTERN.sub("", text)
@@ -555,12 +932,17 @@ class PoisonDefenseEngine:
             # FAST PATH: If the line contains no adversarial special symbols,
             # no GCG suffix can be present in this line. Skip expensive per-token scanning.
             if not (set(stripped_line) & self.ADVERSARIAL_SPECIAL_SYMBOLS):
-                if check_neural and len(stripped_line) >= 20:
-                    neural_res = self.detect_neural_injection(stripped_line, threshold=neural_threshold)
+                if should_check_neural and len(stripped_line) >= 15:
+                    neural_res = self.detect_neural_injection(stripped_line, threshold=eff_neural_threshold)
                     if neural_res["is_injection"]:
                         processed_lines.append(self.REDACTION_MARKER)
                         continue
                 processed_lines.append(line)
+                continue
+
+            # If the line contains repetitive adversarial symbol chains
+            if self.REPETITIVE_ADVERSARIAL_PATTERN.search(stripped_line):
+                processed_lines.append(self.REPETITIVE_ADVERSARIAL_PATTERN.sub(self.ADVERSARIAL_SUFFIX_MARKER, line))
                 continue
 
             # If the entire line is a single unbroken adversarial block (no spaces)
@@ -655,6 +1037,15 @@ class PoisonDefenseEngine:
 
         if not valid_docs_with_indices:
             return []
+
+        # Enforce max batch size DoS ceiling
+        if len(valid_docs_with_indices) > self.max_batch_size:
+            logger.warning(
+                "Batch size (%d) exceeds max_batch_size (%d). Truncating.",
+                len(valid_docs_with_indices),
+                self.max_batch_size,
+            )
+            valid_docs_with_indices = valid_docs_with_indices[: self.max_batch_size]
 
         indices, valid_docs = zip(*valid_docs_with_indices)
         n_samples = len(valid_docs)

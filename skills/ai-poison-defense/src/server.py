@@ -21,7 +21,9 @@ import logging
 import os
 from pathlib import Path
 import sys
-from typing import Any, Dict, List
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastmcp import FastMCP
 
@@ -98,61 +100,199 @@ except Exception as route_err:
 engine = PoisonDefenseEngine()
 
 
-def get_audit_log_path() -> Path:
+AUDIT_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+AUDIT_LOG_BACKUP_COUNT = 5
+
+
+def get_audit_log_path(ext: str = "json") -> Path:
     """
-    Locates the root directory of the project to store security_audit.json.
+    Locates the root directory of the project to store security audit logs.
     Traverses upward from this file until it finds a marker file or reaches workspace root.
     """
     current = Path(__file__).resolve()
     for parent in [current] + list(current.parents):
         if (parent / "requirements.txt").exists() or (parent / "skills").exists() or (parent / "README.md").exists():
-            return parent / "security_audit.json"
-    return Path.cwd() / "security_audit.json"
+            return parent / f"security_audit.{ext}"
+    return Path.cwd() / f"security_audit.{ext}"
 
 
-def log_security_audit(threat_type: str, payload: str) -> None:
+def get_audit_jsonl_path() -> Path:
+    """Returns the path to the append-only rotated security_audit.jsonl file."""
+    return get_audit_log_path(ext="jsonl")
+
+
+def rotate_log_if_needed(log_path: Path, max_bytes: int = AUDIT_LOG_MAX_BYTES, backup_count: int = AUDIT_LOG_BACKUP_COUNT) -> None:
     """
-    Appends a timestamped JSON record to security_audit.json in the repository root directory
-    whenever an AI poisoning, prompt injection, XSS tracking pixel, or adversarial suffix is detected.
+    Rotates an append-only log file when it exceeds max_bytes, keeping up to backup_count backups.
+    Rotation order: .4 -> .5, .3 -> .4, .2 -> .3, .1 -> .2, base -> .1
+    """
+    try:
+        if not log_path.exists() or log_path.stat().st_size < max_bytes:
+            return
+
+        for i in range(backup_count - 1, 0, -1):
+            sfn = log_path.with_name(f"{log_path.name}.{i}")
+            dfn = log_path.with_name(f"{log_path.name}.{i + 1}")
+            if sfn.exists():
+                if dfn.exists():
+                    dfn.unlink()
+                sfn.rename(dfn)
+
+        backup_1 = log_path.with_name(f"{log_path.name}.1")
+        if backup_1.exists():
+            backup_1.unlink()
+        log_path.rename(backup_1)
+    except Exception as rot_err:
+        logger.warning("Failed rotating audit log %s: %s", log_path, rot_err)
+
+
+class SecurityMetrics:
+    """Thread-safe telemetry collector for AI Poison Armor defenses."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.start_time = time.time()
+        self.total_scans: int = 0
+        self.threats_intercepted: Dict[str, int] = {}
+        self.layer_hits: Dict[str, int] = {}
+        self.total_latency_ms: float = 0.0
+
+    def record_scan(
+        self,
+        latency_ms: float,
+        threats: Optional[List[str]] = None,
+        layers: Optional[List[str]] = None,
+        threats_found: Optional[int] = None,
+    ) -> None:
+        with self._lock:
+            self.total_scans += 1
+            self.total_latency_ms += latency_ms
+            if threats:
+                for t in threats:
+                    self.threats_intercepted[t] = self.threats_intercepted.get(t, 0) + 1
+            elif threats_found:
+                self.threats_intercepted["UNKNOWN_THREAT"] = self.threats_intercepted.get("UNKNOWN_THREAT", 0) + threats_found
+            if layers:
+                for l in layers:
+                    self.layer_hits[l] = self.layer_hits.get(l, 0) + 1
+
+    def increment_layer_hit(self, layer: str, count: int = 1) -> None:
+        with self._lock:
+            self.layer_hits[layer] = self.layer_hits.get(layer, 0) + count
+
+    def get_metrics(self) -> Dict[str, Any]:
+        with self._lock:
+            uptime = round(time.time() - self.start_time, 2)
+            avg_lat = round(self.total_latency_ms / self.total_scans, 2) if self.total_scans > 0 else 0.0
+            total_threats = sum(self.threats_intercepted.values())
+            return {
+                "uptime_seconds": uptime,
+                "total_scans": self.total_scans,
+                "total_threats_intercepted": total_threats,
+                "average_latency_ms": avg_lat,
+                "threats_by_type": dict(self.threats_intercepted),
+                "hits_by_layer": dict(self.layer_hits),
+            }
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Alias for telemetry statistics compatibility."""
+        data = self.get_metrics()
+        data["total_requests"] = data["total_scans"]
+        data["total_threats_neutralized"] = data["total_threats_intercepted"]
+        data["layer_hits"] = data["hits_by_layer"]
+        return data
+
+    def get_prometheus_metrics(self) -> str:
+        with self._lock:
+            uptime = round(time.time() - self.start_time, 2)
+            total_threats = sum(self.threats_intercepted.values())
+            lines = [
+                "# HELP poison_armor_requests_total Total number of security scan requests processed",
+                "# TYPE poison_armor_requests_total counter",
+                f"poison_armor_requests_total {self.total_scans}",
+                "",
+                "# HELP poison_armor_threats_neutralized_total Total number of AI threats neutralized",
+                "# TYPE poison_armor_threats_neutralized_total counter",
+                f"poison_armor_threats_neutralized_total {total_threats}",
+                "",
+                "# HELP poison_armor_uptime_seconds Process uptime in seconds",
+                "# TYPE poison_armor_uptime_seconds gauge",
+                f"poison_armor_uptime_seconds {uptime}",
+            ]
+            for layer, count in sorted(self.layer_hits.items()):
+                lines.append(f'poison_armor_layer_hits_total{{layer="{layer}"}} {count}')
+            return "\n".join(lines) + "\n"
+
+
+metrics = SecurityMetrics()
+
+
+def log_security_audit(
+    threat_type: str,
+    payload: str,
+    detection_layer: str = "HEURISTIC_REGEX",
+    severity: str = "HIGH",
+    action: str = "REDACTED",
+    client_id: Optional[str] = None,
+) -> None:
+    """
+    Appends a timestamped JSON record to security_audit.jsonl with size-capped log rotation (10MB, 5 backups).
+    Also maintains a bounded security_audit.json mirror for backward compatibility.
 
     Args:
         threat_type: Human-readable category of the threat (e.g. 'ADVERSARIAL_SUFFIX_THREAT').
         payload: The raw attack payload string that triggered the security alert.
+        detection_layer: Defense layer that caught the threat.
+        severity: Threat severity ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL').
+        action: Security enforcement action taken ('REDACTED', 'QUARANTINED', 'FLAGGED_DRY_RUN').
+        client_id: Optional identifier of the calling agent or client.
     """
-    audit_file = get_audit_log_path()
+    jsonl_file = get_audit_jsonl_path()
+    json_file = get_audit_log_path(ext="json")
     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     audit_entry = {
         "timestamp": timestamp,
         "threat_type": threat_type,
+        "detection_layer": detection_layer,
+        "severity": severity,
+        "action": action,
+        "client_id": client_id or "default",
         "payload_preview": payload[:500] + " ... [TRUNCATED]" if len(payload) > 500 else payload,
         "payload_length": len(payload),
     }
 
+    # 1. Append to high-performance rotated JSONL audit log
+    try:
+        rotate_log_if_needed(jsonl_file)
+        with open(jsonl_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(audit_entry) + "\n")
+    except Exception as jsonl_err:
+        logger.error("Failed to write to JSONL audit log %s: %s", jsonl_file, jsonl_err)
+
+    # 2. Synchronize bounded legacy JSON file for backward compatibility (capped at last 100 entries)
     try:
         records: List[Dict[str, Any]] = []
-        if audit_file.exists():
+        if json_file.exists():
             try:
-                with open(audit_file, "r", encoding="utf-8") as f:
+                with open(json_file, "r", encoding="utf-8") as f:
                     content = f.read().strip()
                     if content:
                         parsed = json.loads(content)
                         if isinstance(parsed, list):
-                            records = parsed
+                            records = parsed[-99:]
                         elif isinstance(parsed, dict):
                             records = [parsed]
-            except Exception as read_err:
-                logger.warning("Could not parse existing %s, starting fresh log: %s", audit_file.name, read_err)
+            except Exception:
                 records = []
 
         records.append(audit_entry)
-
-        with open(audit_file, "w", encoding="utf-8") as f:
+        with open(json_file, "w", encoding="utf-8") as f:
             json.dump(records, f, indent=2)
 
-        logger.info("Security audit event logged: [%s] -> %s", threat_type, audit_file.name)
+        logger.info("Security audit event logged: [%s] -> %s / %s", threat_type, jsonl_file.name, json_file.name)
     except Exception as err:
-        logger.error("Failed to write security audit log to %s: %s", audit_file, err)
+        logger.error("Failed to write security audit log to %s: %s", json_file, err)
 
 
 @mcp.tool()
@@ -160,6 +300,7 @@ def sanitize_document(
     document_text: str,
     wrap_taint: bool = False,
     scan_neural: bool = False,
+    dry_run: bool = False,
 ) -> str:
     """
     Sanitize an incoming untrusted text document, file content, user input, or RAG retrieval chunk against AI poisoning.
@@ -175,29 +316,57 @@ def sanitize_document(
     - Replaces prompt injection patterns with `[REDACTED_INJECTION_ATTEMPT]`.
     - Replaces high-entropy adversarial suffixes (Shannon entropy > 4.5) with `[ADVERSARIAL_SUFFIX_THREAT: REDACTED_HIGH_ENTROPY_BLOCK]`.
     - Removes `![alt](url)` tracking images, `<img>`, and `<iframe>` tracking beacons.
-    - Appends timestamped threat events to `security_audit.json` in the root workspace directory.
+    - Appends timestamped threat events to `security_audit.jsonl` with 10MB log rotation.
     - Optionally wraps sanitized text with cryptographic taint boundaries (`<untrusted_context integrity="...">`) when `wrap_taint=True`.
     - Optionally evaluates semantic neural injection similarity when `scan_neural=True`.
+    - If `dry_run=True`: Does NOT modify text, returns JSON structured threat assessment report.
 
     Args:
         document_text: The raw untrusted string content to sanitize. If empty, returns an empty string.
         wrap_taint: If True, wraps output inside a cryptographic taint boundary delimiter.
         scan_neural: If True, evaluates text against local neural semantic injection embeddings.
+        dry_run: If True, evaluates threats and returns risk diagnostics without modifying text.
 
     Returns:
-        The sanitized, safe string with malicious tokens neutralized, tracking pixels stripped, and injections redacted.
+        The sanitized safe string (or JSON diagnostic assessment report if dry_run=True).
     """
+    start_time = time.perf_counter()
     if not document_text:
         return ""
 
+    if dry_run:
+        assessment = engine.evaluate_document(document_text)
+        lat_ms = (time.perf_counter() - start_time) * 1000.0
+        threat_names = [t["threat_type"] for t in assessment.get("threats", [])]
+        layer_names = [t["layer"] for t in assessment.get("threats", [])]
+        metrics.record_scan(lat_ms, threats=threat_names, layers=layer_names)
+        for t in assessment.get("threats", []):
+            log_security_audit(
+                t["threat_type"],
+                document_text,
+                detection_layer=t.get("layer", "EVALUATOR"),
+                severity=t.get("severity", "HIGH"),
+                action="FLAGGED_DRY_RUN",
+            )
+        return json.dumps({
+            "dry_run": True,
+            "status": "evaluated",
+            "is_safe": assessment.get("is_safe", True),
+            "threat_score": assessment.get("threat_score", 0.0),
+            "threat_count": assessment.get("threat_count", 0),
+            "threats": assessment.get("threats", []),
+            "assessment": assessment,
+            "unmodified_content": document_text,
+        }, indent=2)
+
     logger.info("Sanitizing document (%d characters, wrap_taint=%s, scan_neural=%s)...", len(document_text), wrap_taint, scan_neural)
     raw_input = document_text
-    detected_threats: List[str] = []
+    detected_threats: List[Tuple[str, str, str]] = []  # (threat_type, layer, severity)
 
     # 1. Neutralize and strip Markdown XSS, HTML <img> tags, and <iframe> tracking elements
     xss_cleaned = engine.strip_markdown_xss(raw_input)
     if xss_cleaned != raw_input:
-        detected_threats.append("MARKDOWN_XSS_TRACKING_PIXEL")
+        detected_threats.append(("MARKDOWN_XSS_TRACKING_PIXEL", "XSS_TRACKING_PIXEL", "HIGH"))
 
     # 2. Strip zero-width Unicode characters, redact prompt injections, detect adversarial suffixes, and apply neural/taint options
     fully_sanitized = engine.strip_injections(
@@ -208,21 +377,73 @@ def sanitize_document(
 
     # Check if prompt injection phrases were redacted
     if "[REDACTED_INJECTION_ATTEMPT]" in fully_sanitized:
-        detected_threats.append("PROMPT_INJECTION_ATTEMPT")
+        detected_threats.append(("PROMPT_INJECTION_ATTEMPT", "HEURISTIC_REGEX", "CRITICAL"))
 
     # Check if adversarial suffix marker was inserted
     if "[ADVERSARIAL_SUFFIX_THREAT" in fully_sanitized:
-        detected_threats.append("ADVERSARIAL_SUFFIX_THREAT")
+        detected_threats.append(("ADVERSARIAL_SUFFIX_THREAT", "SHANNON_ENTROPY", "CRITICAL"))
 
     # Check if zero-width characters were present
     if engine.ZERO_WIDTH_PATTERN.search(raw_input):
-        detected_threats.append("ZERO_WIDTH_STEGANOGRAPHY")
+        detected_threats.append(("ZERO_WIDTH_STEGANOGRAPHY", "UNICODE_STEGANOGRAPHY", "HIGH"))
 
-    # Deduplicate and log all detected threats to security_audit.json
-    for threat in dict.fromkeys(detected_threats):
-        log_security_audit(threat, raw_input)
+    # Check if obfuscated injection was caught
+    if "[REDACTED_OBFUSCATED_INJECTION_ATTEMPT]" in fully_sanitized:
+        detected_threats.append(("OBFUSCATED_INJECTION_ATTEMPT", "DEOBFUSCATION", "CRITICAL"))
+
+    lat_ms = (time.perf_counter() - start_time) * 1000.0
+    threat_types = [t[0] for t in detected_threats]
+    layers = [t[1] for t in detected_threats]
+    metrics.record_scan(lat_ms, threats=threat_types, layers=layers)
+
+    # Deduplicate and log all detected threats
+    for threat, layer, sev in dict.fromkeys(detected_threats):
+        log_security_audit(threat, raw_input, detection_layer=layer, severity=sev, action="REDACTED")
 
     return fully_sanitized
+
+
+@mcp.tool()
+def sanitize_model_output(output_text: str) -> str:
+    """
+    Sanitize LLM model generation or agent response output before transmitting to the user or external systems.
+
+    Detects and redacts sensitive credentials, private keys, API keys (OpenAI, Anthropic, AWS, GitHub, JWTs),
+    and neutralizes Markdown tracking pixels/images to prevent SSRF and IP exfiltration.
+    Replaces detected secret credentials with `[REDACTED_SECRET_LEAK]`.
+
+    Args:
+        output_text: The raw LLM generation string to inspect and sanitize.
+
+    Returns:
+        The sanitized output string with credentials safely redacted and tracking pixels stripped.
+    """
+    start_time = time.perf_counter()
+    if not output_text:
+        return ""
+
+    sanitized, detected_leaks = engine.filter_egress_leaks(output_text)
+    lat_ms = (time.perf_counter() - start_time) * 1000.0
+    metrics.record_scan(lat_ms, threats=detected_leaks, layers=["EGRESS_FILTER"] * len(detected_leaks))
+
+    for leak in dict.fromkeys(detected_leaks):
+        log_security_audit(
+            f"EGRESS_LEAK_PREVENTED_{leak}",
+            output_text,
+            detection_layer="EGRESS_CREDENTIALS",
+            severity="CRITICAL",
+            action="REDACTED",
+        )
+
+    return sanitized
+
+
+@mcp.resource("security://metrics")
+def get_security_metrics() -> str:
+    """
+    Exposes real-time operational defense telemetry, scan rates, threat distribution, and latency.
+    """
+    return json.dumps(metrics.get_metrics(), indent=2)
 
 
 @mcp.tool()
@@ -411,16 +632,36 @@ def verify_article_consensus(articles: List[Dict[str, Any]]) -> str:
 @mcp.resource("security://audit-log")
 def get_security_audit_log() -> str:
     """
-    Exposes the persistent local security_audit.json audit trail as an MCP resource.
+    Exposes the persistent local security audit trail as an MCP resource.
     Provides complete visibility into all intercepted tracking pixels, prompt injections,
-    and adversarial suffixes without needing external log monitoring tools.
+    adversarial suffixes, and egress secret leaks without needing external log monitoring tools.
+    Reads from security_audit.jsonl and returns a formatted JSON record list.
     """
-    log_path = get_audit_log_path()
-    if log_path.exists():
+    jsonl_path = get_audit_jsonl_path()
+    records: List[Dict[str, Any]] = []
+
+    if jsonl_path.exists():
         try:
-            return log_path.read_text(encoding="utf-8")
+            with open(jsonl_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            records.append(json.loads(line))
+                        except Exception:
+                            pass
+            return json.dumps(records, indent=2)
+        except Exception as read_err:
+            logger.warning("Could not read jsonl log: %s", read_err)
+
+    # Fallback to legacy json
+    json_path = get_audit_log_path(ext="json")
+    if json_path.exists():
+        try:
+            return json_path.read_text(encoding="utf-8")
         except Exception as read_err:
             return json.dumps([{"error": f"Failed to read audit log: {read_err}"}])
+
     return "[]"
 
 

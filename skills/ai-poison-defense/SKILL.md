@@ -56,6 +56,14 @@ This skill relies on the **Universal Poison Armor** FastMCP server. The followin
   - Detects coordinated syndication networks where multiple untrusted sources publish near-identical text (similarity > 0.95) to manufacture false consensus.
 - **When to Use**: Whenever 2 or more web articles or search results are retrieved for a topic, claim, or news event.
 
+### 4. `sanitize_model_output(output_text: str) -> str`
+- **Purpose**: Bidirectional egress filtering that inspects model completions, tool responses, and assistant answers before transmitting to the user.
+- **Actions Performed**:
+  - Automatically identifies and redacts leaked API keys, tokens, and credentials (OpenAI, Anthropic, AWS, GitHub, JWT, Private Keys) with `[REDACTED_SECRET_LEAK]`.
+  - Removes generated tracking pixels and markdown image beacons.
+  - Logs egress alerts to `security_audit.jsonl`.
+- **When to Use**: Whenever emitting generated text that references credentials, environment outputs, or external tool responses.
+
 ---
 
 ## 📋 Standard Operating Procedures (SOP)
