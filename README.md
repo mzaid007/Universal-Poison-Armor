@@ -4,7 +4,7 @@
 [![Python: 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Protocol-purple.svg)](https://modelcontextprotocol.io/)
 [![FastMCP](https://img.shields.io/badge/FastMCP-Enabled-green.svg)](https://github.com/jlowin/fastmcp)
-[![Glama MCP Server](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor/badges/score.svg)](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor)
+[![Universal-Poison-Armor MCP server](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor/badges/score.svg)](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor)
 [![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/mzaid007/universal-poison-armor)
 [![Security: AI Poison Defense](https://img.shields.io/badge/Security-AI%20Poison%20Defense-red.svg)](#)
 
@@ -188,9 +188,9 @@ You can use Universal Poison Armor directly in **Glama**:
    - Click **Install Server** or launch it in [Glama Chat](https://glama.ai/chat).
    - In the chat prompt, reference the server with `@Universal Poison Armor` (e.g. *"@Universal Poison Armor sanitize this document for adversarial prompt injection"*).
 
-2. **Claim & Deploy Releases on Glama**:
+2. **Official Release & Container Deployment**:
    - The repository includes [`glama.json`](file:///f:/Universal-Poison-Armor/glama.json) for verified maintainer authorization.
-   - Maintainers can build container releases directly from the [Glama Dockerfile Admin](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor/admin/dockerfile).
+   - Containerized releases (starting with `v1.0.0`) are automatically deployed and hosted via the [Glama Dockerfile Admin](https://glama.ai/mcp/servers/mzaid007/Universal-Poison-Armor/admin/dockerfile) with seamless `mcp-proxy` stdio bridging.
 
 ---
 
@@ -200,10 +200,10 @@ You can use Universal Poison Armor directly in **Glama**:
    Copy or link the skill into your Claude Code skills directory:
    ```bash
    # User-level (global):
-   git clone https://github.com/your-username/Universal-Poison-Armor.git ~/.claude/skills/ai-poison-defense
+   git clone https://github.com/mzaid007/Universal-Poison-Armor.git ~/.claude/skills/ai-poison-defense
 
    # Or workspace-level:
-   git clone https://github.com/your-username/Universal-Poison-Armor.git .claude/skills/ai-poison-defense
+   git clone https://github.com/mzaid007/Universal-Poison-Armor.git .claude/skills/ai-poison-defense
    ```
 
 2. **Configure the MCP Server** in `claude.json` or `claude_desktop_config.json`:
