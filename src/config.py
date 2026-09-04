@@ -46,6 +46,15 @@ class PoisonArmorConfig:
             "models/deberta-v3-prompt-injection/model.onnx"
         )
     )
+    auto_download_onnx: bool = field(
+        default_factory=lambda: _bool_from_env("POISON_ARMOR_AUTO_DOWNLOAD_ONNX", False)
+    )
+    onnx_model_id: str = field(
+        default_factory=lambda: os.environ.get(
+            "POISON_ARMOR_ONNX_MODEL_ID",
+            "protectai/deberta-v3-base-prompt-injection-v2"
+        )
+    )
 
     # Operational Modes
     dry_run: bool = field(

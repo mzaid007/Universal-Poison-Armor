@@ -25,6 +25,7 @@ import hashlib
 import logging
 import math
 import os
+from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 from urllib.parse import unquote, urlparse
@@ -378,14 +379,43 @@ class PoisonDefenseEngine:
             n_estimators=100,
         )
 
-        # Optional ONNX Runtime session for dedicated prompt injection classifier
+        # ONNX Runtime configuration for dedicated sequence classifier
         self.onnx_session = None
-        if HAS_ONNX and self.onnx_model_path and os.path.exists(self.onnx_model_path):
-            try:
-                self.onnx_session = ort.InferenceSession(self.onnx_model_path, providers=["CPUExecutionProvider"])
-                logger.info("Loaded ONNX Prompt Injection model from %s", self.onnx_model_path)
-            except Exception as onnx_err:
-                logger.warning("Failed to initialize ONNX session from %s: %s", self.onnx_model_path, onnx_err)
+        self.onnx_tokenizer = None
+        self.onnx_model_id = cfg.onnx_model_id if cfg else "protectai/deberta-v3-base-prompt-injection-v2"
+        self.auto_download_onnx = cfg.auto_download_onnx if cfg else False
+
+        if HAS_ONNX:
+            # Check if auto-download requested and model missing
+            if not self.onnx_model_path and self.auto_download_onnx:
+                try:
+                    from src.download_model import download_and_export
+                    target_dir = "models/deberta-v3-prompt-injection"
+                    logger.info("Auto-downloading ONNX model '%s' to '%s'...", self.onnx_model_id, target_dir)
+                    download_and_export(model_id=self.onnx_model_id, output_dir=target_dir, export_onnx=True)
+                    model_file = os.path.join(target_dir, "model.onnx")
+                    if os.path.exists(model_file):
+                        self.onnx_model_path = model_file
+                except Exception as dl_err:
+                    logger.warning(
+                        "Auto-download for ONNX model skipped/failed (%s), falling back to offline semantic embeddings.",
+                        dl_err,
+                    )
+
+            if self.onnx_model_path and os.path.exists(self.onnx_model_path):
+                try:
+                    self.onnx_session = ort.InferenceSession(self.onnx_model_path, providers=["CPUExecutionProvider"])
+                    model_dir = str(Path(self.onnx_model_path).parent)
+                    try:
+                        from transformers import AutoTokenizer
+                        self.onnx_tokenizer = AutoTokenizer.from_pretrained(model_dir)
+                        logger.info("Loaded ONNX Prompt Injection model and tokenizer from %s", self.onnx_model_path)
+                    except Exception as tok_err:
+                        logger.warning("Loaded ONNX graph but failed loading local tokenizer: %s", tok_err)
+                except Exception as onnx_err:
+                    logger.warning("Failed to initialize ONNX session from %s: %s", self.onnx_model_path, onnx_err)
+                    self.onnx_session = None
+                    self.onnx_tokenizer = None
 
         logger.info("PoisonDefenseEngine initialized successfully.")
 
@@ -507,28 +537,57 @@ class PoisonDefenseEngine:
             f'</untrusted_context>'
         )
 
-    def detect_neural_injection(self, text: str, threshold: float = 0.45) -> Dict[str, Any]:
+    def detect_neural_injection(self, text: str, threshold: Optional[float] = None) -> Dict[str, Any]:
         """
-        Detects semantic, natural-language prompt injections using local neural embeddings
-        or local ONNX Runtime inference without relying on external LLM model providers.
-
-        Catches indirect attacks, conversational jailbreaks, and instructions that have
-        natural English entropy and lack explicit regex keywords.
-        Uses imperative syntax gating to avoid false positives on benign prose.
+        Detects semantic, natural-language prompt injections using primary local ONNX sequence classification
+        with seamless fallback to offline SentenceTransformer dense semantic anchor embeddings
+        and imperative syntax gating.
 
         Args:
             text: The text snippet to evaluate.
-            threshold: Cosine similarity cutoff against semantic injection anchors (default: 0.45).
+            threshold: Probability/similarity cutoff (defaults to config.neural_threshold or 0.45).
 
         Returns:
             Dict containing 'is_injection', 'confidence', 'method', and 'matched_intent'.
         """
+        cutoff = threshold if threshold is not None else self.neural_threshold
         if not text or len(text.strip()) < 10:
-            return {"is_injection": False, "confidence": 0.0, "method": "neural_local", "matched_intent": None}
+            return {"is_injection": False, "confidence": 0.0, "method": "neural_skipped", "matched_intent": None}
 
         clean = text.strip()
 
-        # Check local semantic anchor projection via SentenceTransformer
+        # Primary Path: Hardware-accelerated local ONNX sequence classification
+        if self.onnx_session is not None and self.onnx_tokenizer is not None:
+            try:
+                inputs = self.onnx_tokenizer(
+                    clean,
+                    return_tensors="np",
+                    padding=True,
+                    truncation=True,
+                    max_length=128,
+                )
+                onnx_inputs = {
+                    input_meta.name: inputs[input_meta.name]
+                    for input_meta in self.onnx_session.get_inputs()
+                    if input_meta.name in inputs
+                }
+                logits = self.onnx_session.run(None, onnx_inputs)[0]
+                exp_logits = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
+                probs = exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)
+                inj_prob = float(probs[0][1]) if probs.shape[-1] > 1 else float(probs[0][0])
+                onnx_cutoff = cutoff if cutoff > 0.50 else 0.75
+                is_inj = bool(inj_prob >= onnx_cutoff)
+                return {
+                    "is_injection": is_inj,
+                    "confidence": round(inj_prob, 4),
+                    "method": "onnx_sequence_classifier",
+                    "model": getattr(self, "onnx_model_id", "deberta-v3-prompt-injection"),
+                    "matched_intent": "ONNX_NEURAL_PROMPT_INJECTION" if is_inj else None,
+                }
+            except Exception as ort_eval_err:
+                logger.debug("ONNX inference failed (%s), falling back to offline semantic embeddings...", ort_eval_err)
+
+        # Fallback Path: Offline SentenceTransformer Semantic Anchor Projection + Imperative Gating
         query_emb = self.get_embeddings([clean])[0]
         sims = np.dot(self.anchor_embeddings, query_emb)
         max_idx = int(np.argmax(sims))
@@ -537,7 +596,7 @@ class PoisonDefenseEngine:
         # Imperative syntax gating: check if direct command words exist
         words = set(re.findall(r"\b[a-zA-Z]+\b", clean.lower()))
         has_command = bool(words & self.IMPERATIVE_COMMAND_WORDS)
-        effective_threshold = threshold if has_command else max(threshold + 0.20, 0.65)
+        effective_threshold = cutoff if has_command else max(cutoff + 0.20, 0.65)
 
         is_inj = bool(max_sim >= effective_threshold)
         return {
