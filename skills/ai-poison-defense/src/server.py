@@ -424,9 +424,11 @@ def run_server() -> None:
     # Determine transport
     # Priority: 1. CLI flag (--transport)
     #           2. MCP_TRANSPORT environment variable
-    #           3. Cloud environment signature detection
-    #           4. Default: "stdio" for offline/local agents (Claude Desktop, Cursor, Antigravity)
+    #           3. Glama container detection (GLAMA_VERSION -> stdio with mcp-proxy)
+    #           4. Cloud environment signature detection
+    #           5. Default: "stdio" for offline/local agents (Claude Desktop, Cursor, Antigravity)
     env_transport = os.environ.get("MCP_TRANSPORT", "").strip().lower()
+    is_glama_env = "GLAMA_VERSION" in os.environ
     is_cloud_env = any(
         k in os.environ
         for k in [
@@ -446,6 +448,9 @@ def run_server() -> None:
         transport = args.transport.lower()
     elif env_transport in ["stdio", "sse"]:
         transport = env_transport
+    elif is_glama_env:
+        # Glama uses mcp-proxy which communicates with the server process via stdin/stdout
+        transport = "stdio"
     elif is_cloud_env:
         transport = "sse"
     else:
